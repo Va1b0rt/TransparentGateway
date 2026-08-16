@@ -1,0 +1,14 @@
+[
+  {
+    "type": "jsonl_inventory",
+    "name": "corporate-inventory",
+    "path": "/inventory/upstreams.jsonl"
+  },
+  {
+    "type": "http_json_feed",
+    "name": "authorised-provider-api",
+    "enabled": false,
+    "url": "https://provider.example/api/v1/proxies",
+    "token_env": "PROVIDER_API_TOKEN"
+  }
+]

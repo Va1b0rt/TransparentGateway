@@ -1,0 +1,62 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  validator:
+    build: ./validator
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${VALIDATOR_REDIS_URL}
+      CONNECTORS_CONFIG: /inventory/connectors.json
+      RESERVE_SIZE: ${RESERVE_SIZE}
+      VALIDATION_CONCURRENCY: ${VALIDATION_CONCURRENCY}
+      VALIDATION_INTERVAL_SECONDS: ${VALIDATION_INTERVAL_SECONDS}
+      PROVIDER_API_TOKEN: ${PROVIDER_API_TOKEN}
+    volumes:
+      - ./inventory:/inventory:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  gateway:
+    build: ./gateway
+    network_mode: host
+    restart: on-failure
+    cap_add: ["NET_ADMIN"]
+    environment:
+      CLIENT_CIDR: ${CLIENT_CIDR}
+      REDIS_URL: ${GATEWAY_REDIS_URL}
+      POOL_SIZE: ${POOL_SIZE}
+      PROXY_CREDENTIALS_FILE: /run/secrets/proxy-credentials.json
+      DNS_DEFAULT_RESOLVER_IPS: ${DNS_DEFAULT_RESOLVER_IPS}
+      DNS_TCP_TIMEOUT_SECONDS: ${DNS_TCP_TIMEOUT_SECONDS}
+      DNS_MAX_CONCURRENCY: ${DNS_MAX_CONCURRENCY}
+      DNS_DOH_IP: ${DNS_DOH_IP}
+      DNS_DOH_SERVER_NAME: ${DNS_DOH_SERVER_NAME}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; sock=socket.create_connection(('127.0.0.1',12000),3); sock.close()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./secrets:/run/secrets:ro
+
+volumes:
+  redis_data:

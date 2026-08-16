@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pre-*
+*.backup-*
+runtime/
+inventory/connectors.json
+inventory/upstreams.jsonl
+secrets/*.json*
+!secrets/*.json.example
