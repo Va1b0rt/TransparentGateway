@@ -8,6 +8,11 @@ The project is intended for networks and proxy services you administer or are
 explicitly authorised to use. It does not collect public proxies or implement
 CAPTCHA, blocking, or rate-limit evasion.
 
+## Related articles
+
+- [Прозоре проксіювання TCP: redsocks + HAProxy](https://devdays.net.ua/articles/prozore-proksiiuvannia-tcp-redsocks-haproxy/)
+- [Витік DNS, або будуємо велосипед](https://devdays.net.ua/articles/vitik-dns-abo-buduiemo-velosiped/)
+
 ## How it works
 
 ```text
