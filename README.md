@@ -47,9 +47,47 @@ The gateway cannot see whether an application used syntax such as `dig name` or
 - **gateway** is the only privileged container. It runs `iptables`, `redsocks`,
   the egress relay, the DoH relay, and the UDP-to-TCP DNS relay in the host network
   namespace.
-- **validator** loads authorised upstreams from connector definitions, performs
-  concurrent TCP reachability checks, and publishes a normalised snapshot to Redis.
+- **fetcher** loads candidates concurrently from configured, authorised inventory
+  and HTTPS feed connectors.
+- **validator** performs bounded asynchronous TCP reachability checks and records
+  latency plus the consecutive-success count.
+- **ranker** applies latency/stability scoring, optional ASN/subnet diversity
+  penalties, and publishes configurable reserve and active pools.
 - **redis** stores the latest validated pool with AOF persistence.
+
+### Authorised proxy pipeline
+
+The pool pipeline replaces manual active-pool maintenance while keeping source
+admission explicit. It does not scrape arbitrary public proxy lists. Each source
+implements the connector contract in `validator/connectors.py`, so adding an
+authorised file, CMDB export, or private HTTPS feed does not change later stages:
+
+```text
+configured connectors
+       │
+       ▼
+fetcher  ──→ proxy_pool:raw:v1
+                    │
+                    ▼
+validator ─→ proxy_pool:validated:v1
+                    │
+                    ▼
+ranker   ──→ proxy_pool:reserve:v1
+                    │
+                    ├──→ proxy_pool:active:v1
+                    └──→ transparent-gateway:validated:v1 (gateway compatibility)
+```
+
+Fetcher, validator, and ranker run as separate unprivileged Compose services.
+They exchange complete JSON snapshots through Redis instead of calling each
+other directly. Every publication writes a unique temporary key and atomically
+renames it over the previous snapshot, so readers never observe a partial pool.
+
+The ranker combines measured latency and a bounded consecutive-success bonus. If
+an authorised source supplies `metadata.asn`, repeated ASN values are penalised;
+repeated IPv4 `/24` or IPv6 `/48` networks are also penalised. No external ASN
+lookup or anonymity test is performed. A pool manager may consume the reserve
+key, while the included egress relay consumes the compatibility active key.
 
 ### DNS relays
 
@@ -105,6 +143,35 @@ Important environment variables:
 | `DNS_MAX_CONCURRENCY` | Maximum concurrent DNS requests. |
 | `POOL_SIZE` | Maximum number of validated upstreams used by the gateway. |
 | `RESERVE_SIZE` | Maximum number of candidates written to the Redis snapshot. |
+| `MIN_SCORE_THRESHOLD` | Optional lower score boundary applied by the ranker. |
+| `FETCH_INTERVAL_SECONDS` | Interval between authorised-source refreshes. |
+| `VALIDATION_INTERVAL_SECONDS` | Interval between reachability validation cycles. |
+| `RANK_INTERVAL_SECONDS` | Interval between reserve/active pool publications. |
+
+### Pool sizing
+
+`150` is an example deployment value, not a protocol limit or a constant embedded
+in the code. Set `POOL_SIZE` to the number of validated upstreams the gateway may
+select concurrently; the default example is `150`:
+
+```env
+POOL_SIZE=150
+RESERVE_SIZE=700
+MIN_SCORE_THRESHOLD=0
+```
+
+The ranker publishes at most `RESERVE_SIZE` scored candidates and copies the first
+`POOL_SIZE` entries into the active snapshot. Keep `POOL_SIZE` less than or equal
+to `RESERVE_SIZE` so a reserve remains available after a failed endpoint enters
+cooldown. Set `MIN_SCORE_THRESHOLD` when quality should determine the final count;
+the active pool may then contain fewer than `POOL_SIZE` entries.
+
+Choose these values from observed connection concurrency, upstream capacity, and
+the desired failure headroom rather than copying `150`. For a small lab, a pool
+of 8–20 endpoints is usually enough; larger authorised fleets may benefit from a
+larger reserve. The current implementation ranks authorised candidates by
+reachability, latency, stability, and supplied network metadata. It does not
+claim an anonymity score or public-proxy discovery.
 
 ### Upstream inventory
 

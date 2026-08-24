@@ -29,8 +29,11 @@ class ProxyCandidate:
     def address(self) -> str:
         return f"{self.protocol}://{self.endpoint}"
 
+    def snapshot_without_validation(self) -> dict[str, object]:
+        return {**asdict(self), "address": self.address}
+
     def snapshot(self, latency_ms: int) -> dict[str, object]:
-        return {**asdict(self), "address": self.address, "latency_ms": latency_ms}
+        return {**self.snapshot_without_validation(), "latency_ms": latency_ms}
 
 
 class ProxySourceConnector(Protocol):

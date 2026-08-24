@@ -18,13 +18,44 @@ services:
     restart: unless-stopped
     environment:
       REDIS_URL: ${VALIDATOR_REDIS_URL}
-      CONNECTORS_CONFIG: /inventory/connectors.json
-      RESERVE_SIZE: ${RESERVE_SIZE}
       VALIDATION_CONCURRENCY: ${VALIDATION_CONCURRENCY}
       VALIDATION_INTERVAL_SECONDS: ${VALIDATION_INTERVAL_SECONDS}
+      PROXY_TCP_TIMEOUT_SECONDS: ${PROXY_TCP_TIMEOUT_SECONDS:-3}
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  fetcher:
+    build: ./validator
+    command: ["python", "/app/fetcher.py"]
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${VALIDATOR_REDIS_URL}
+      CONNECTORS_CONFIG: /inventory/connectors.json
+      FETCH_INTERVAL_SECONDS: ${FETCH_INTERVAL_SECONDS:-900}
       PROVIDER_API_TOKEN: ${PROVIDER_API_TOKEN}
     volumes:
       - ./inventory:/inventory:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  ranker:
+    build: ./validator
+    command: ["python", "/app/ranker.py"]
+    restart: unless-stopped
+    environment:
+      REDIS_URL: ${VALIDATOR_REDIS_URL}
+      POOL_SIZE: ${POOL_SIZE}
+      RESERVE_SIZE: ${RESERVE_SIZE}
+      MIN_SCORE_THRESHOLD: ${MIN_SCORE_THRESHOLD:-0}
+      RANK_INTERVAL_SECONDS: ${RANK_INTERVAL_SECONDS:-60}
     depends_on:
       redis:
         condition: service_healthy
