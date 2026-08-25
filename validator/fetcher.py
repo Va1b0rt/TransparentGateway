@@ -6,12 +6,15 @@ import json
 import os
 import time
 
-from connectors import collect_all, load_connectors
+from sources import CONNECTOR_REGISTRY, collect_all, load_connectors
 from storage import RAW_KEY, publish_snapshot
 
 
 async def cycle(client: object) -> int:
-    connectors = load_connectors(os.getenv("CONNECTORS_CONFIG", "/inventory/connectors.json"))
+    connectors = load_connectors(
+        os.getenv("CONNECTORS_CONFIG", "/inventory/connectors.json"),
+        CONNECTOR_REGISTRY,
+    )
     candidates = await collect_all(connectors)
     snapshot = {
         "generated_at": int(time.time()),

@@ -1,14 +1,13 @@
-[
-  {
-    "type": "jsonl_inventory",
-    "name": "corporate-inventory",
-    "path": "/inventory/upstreams.jsonl"
-  },
-  {
-    "type": "http_json_feed",
-    "name": "authorised-provider-api",
-    "enabled": false,
-    "url": "https://provider.example/api/v1/proxies",
-    "token_env": "PROVIDER_API_TOKEN"
-  }
-]
+{
+  "allowed_connector_types": [
+    "jsonl_inventory",
+    "http_json_feed"
+  ],
+  "active_connectors": [
+    {
+      "type": "jsonl_inventory",
+      "name": "corporate-inventory",
+      "path": "/inventory/upstreams.jsonl"
+    }
+  ]
+}

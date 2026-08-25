@@ -47,10 +47,11 @@ The gateway cannot see whether an application used syntax such as `dig name` or
 - **gateway** is the only privileged container. It runs `iptables`, `redsocks`,
   the egress relay, the DoH relay, and the UDP-to-TCP DNS relay in the host network
   namespace.
-- **fetcher** loads candidates concurrently from configured, authorised inventory
-  and HTTPS feed connectors.
-- **validator** performs bounded asynchronous TCP reachability checks and records
-  latency plus the consecutive-success count.
+- **fetcher** loads candidates concurrently from explicitly active, authorised
+  inventory and HTTPS feed connectors.
+- **validator** performs bounded asynchronous HTTP(S)/SOCKS4/SOCKS5 checks through
+  each proxy, rejects client-IP leaks, and records end-to-end latency plus the
+  consecutive-success count.
 - **ranker** applies latency/stability scoring, optional ASN/subnet diversity
   penalties, and publishes configurable reserve and active pools.
 - **redis** stores the latest validated pool with AOF persistence.
@@ -59,8 +60,10 @@ The gateway cannot see whether an application used syntax such as `dig name` or
 
 The pool pipeline replaces manual active-pool maintenance while keeping source
 admission explicit. It does not scrape arbitrary public proxy lists. Each source
-implements the connector contract in `validator/connectors.py`, so adding an
-authorised file, CMDB export, or private HTTPS feed does not change later stages:
+implements `ProxySourceConnector` from `validator/sources/base.py`. Concrete
+connectors live in `validator/sources/` and are registered manually in
+`validator/sources/__init__.py`; merely placing a Python file in that directory
+does not execute or enable it.
 
 ```text
 configured connectors
@@ -83,11 +86,39 @@ They exchange complete JSON snapshots through Redis instead of calling each
 other directly. Every publication writes a unique temporary key and atomically
 renames it over the previous snapshot, so readers never observe a partial pool.
 
+The connector config provides two explicit lists: connector types permitted for
+this deployment and connector instances that are active. An active connector must
+also exist in the in-code registry and in `allowed_connector_types`.
+
 The ranker combines measured latency and a bounded consecutive-success bonus. If
 an authorised source supplies `metadata.asn`, repeated ASN values are penalised;
-repeated IPv4 `/24` or IPv6 `/48` networks are also penalised. No external ASN
-lookup or anonymity test is performed. A pool manager may consume the reserve
-key, while the included egress relay consumes the compatibility active key.
+repeated IPv4 `/24` or IPv6 `/48` networks are also penalised. A pool manager may
+consume the reserve key, while the included egress relay consumes the compatibility
+active key.
+
+### Protocol and anonymity validation
+
+The validator does more than open the candidate's TCP port. It performs the real
+proxy negotiation and requests an operator-controlled echo endpoint through the
+candidate:
+
+- HTTP and TLS-wrapped HTTP proxy requests;
+- SOCKS4/SOCKS4a `CONNECT`;
+- SOCKS5 no-auth negotiation and `CONNECT`, with proxy-side hostname resolution;
+- an HTTP or HTTPS request through the established route.
+
+The validator first requests the same echo endpoint directly to learn its own
+observed identity. A candidate is rejected when that identity is still the
+endpoint peer, or appears in `Forwarded`, `X-Forwarded-For`, `X-Real-IP`,
+`Client-IP`, or another known forwarding header. A proxy that hides the identity
+but sends `Via` or another proxy marker is accepted as `anonymous`; one without
+such markers is recorded as `elite`. `Via` reveals proxy use, not the client's IP,
+so it is not by itself an anonymity failure.
+
+The echo service must return JSON with `backend_peer` (or `origin`) and a `headers`
+object. `test-echo.py` supplies this contract for the isolated lab. Keep this
+endpoint under your control: a third-party checker sees every candidate exit IP
+and becomes part of the validation trust boundary.
 
 ### DNS relays
 
@@ -145,7 +176,10 @@ Important environment variables:
 | `RESERVE_SIZE` | Maximum number of candidates written to the Redis snapshot. |
 | `MIN_SCORE_THRESHOLD` | Optional lower score boundary applied by the ranker. |
 | `FETCH_INTERVAL_SECONDS` | Interval between authorised-source refreshes. |
-| `VALIDATION_INTERVAL_SECONDS` | Interval between reachability validation cycles. |
+| `VALIDATION_INTERVAL_SECONDS` | Interval between protocol/anonymity validation cycles. |
+| `ANONYMITY_CHECK_URL` | Operator-controlled JSON echo endpoint used directly and through every candidate. |
+| `ANONYMITY_CLIENT_IPS` | Optional comma-separated additional direct/NAT IPs that must never be leaked. |
+| `PROXY_VALIDATION_TIMEOUT_SECONDS` | End-to-end timeout for the direct check and each proxy check. |
 | `RANK_INTERVAL_SECONDS` | Interval between reserve/active pool publications. |
 
 ### Pool sizing
@@ -170,19 +204,48 @@ Choose these values from observed connection concurrency, upstream capacity, and
 the desired failure headroom rather than copying `150`. For a small lab, a pool
 of 8–20 endpoints is usually enough; larger authorised fleets may benefit from a
 larger reserve. The current implementation ranks authorised candidates by
-reachability, latency, stability, and supplied network metadata. It does not
-claim an anonymity score or public-proxy discovery.
+protocol-level reachability, anonymity, latency, stability, and supplied network
+metadata. It does not perform public-proxy discovery.
+
+### Connector registry
+
+The connector configuration contains only the deployment allow-list and active
+instances:
+
+```json
+{
+  "allowed_connector_types": ["jsonl_inventory", "http_json_feed"],
+  "active_connectors": [
+    {
+      "type": "jsonl_inventory",
+      "name": "managed-socks-pool",
+      "path": "/inventory/upstreams.jsonl"
+    }
+  ]
+}
+```
+
+To add a built-in connector, implement `collect()` as an async iterator in a new
+module under `validator/sources/`, import its class, and explicitly call
+`CONNECTOR_REGISTRY.register()` in `validator/sources/__init__.py`. Then allow its
+type and add an active instance in `inventory/connectors.json`. Fetcher and all
+downstream workers remain unchanged.
 
 ### Upstream inventory
 
-The JSONL inventory contains no passwords:
+The canonical candidate has `host`, `port`, `protocol`, `source`, optional
+`credential_ref`, and optional string metadata. The legacy `endpoint` form remains
+accepted at the input boundary; snapshots contain both forms for gateway
+compatibility. An unauthenticated SOCKS5 candidate can be as small as:
 
 ```json
-{"endpoint":"proxy.example:1080","protocol":"socks5","source":"managed-provider","credential_ref":"provider-1"}
+{"host":"proxy.example","port":1080,"protocol":"socks5"}
 ```
 
 Supported values for `protocol` are `http`, `https`, `socks4`, and `socks5`.
-Credentials are resolved only inside the gateway from the ignored secret file:
+Proxy authentication is optional. When a gateway connection needs credentials,
+the inventory carries only an opaque reference and the gateway resolves it from
+the ignored secret file:
 
 ```json
 {
@@ -321,8 +384,9 @@ python -m pytest tests
 ```
 
 Unit tests cover connector normalisation, secret-reference authentication, CONNECT
-parsing, and original-destination extraction. For kernel TPROXY and transparent
-source-address behaviour, use the end-to-end VLAN tests above.
+parsing, SOCKS5 protocol validation, anonymity classification, and
+original-destination extraction. For kernel TPROXY and transparent source-address
+behaviour, use the end-to-end VLAN tests above.
 
 ## Limitations
 
@@ -332,8 +396,11 @@ source-address behaviour, use the end-to-end VLAN tests above.
 - explicit resolvers must accept DNS over TCP on port 53;
 - upstream availability can change, so production use requires monitoring and a
   sufficiently reliable authorised proxy pool;
-- the validator checks proxy endpoint reachability; protocol negotiation and
-  DNS/TCP capability are confirmed by the gateway when used.
+- authenticated-only proxies need a credential-aware validation policy; the
+  default validator deliberately offers SOCKS5 no-auth and sends no proxy auth;
+- anonymity validation depends on the correctness and availability of the
+  configured operator-controlled echo endpoint;
+- DNS/TCP capability is confirmed separately by the gateway when a proxy is used.
 
 ## Security
 

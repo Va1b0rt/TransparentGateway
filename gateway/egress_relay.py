@@ -122,10 +122,14 @@ def target_from_connect(header: bytes) -> tuple[str, int]:
 
 async def connect_upstream(candidate: dict[str, Any], target: tuple[str, int], credentials: Credentials) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     endpoint, protocol = str(candidate["endpoint"]), str(candidate["protocol"])
-    host, port_text = endpoint.rsplit(":", 1)
+    host = str(candidate.get("host") or "")
+    port_value = candidate.get("port")
+    if not host or port_value is None:
+        host, port_text = endpoint.rsplit(":", 1)
+        host, port_value = host.strip("[]"), int(port_text)
     auth = credentials.get(candidate.get("credential_ref"))
     ssl_context = ssl.create_default_context() if protocol == "https" else None
-    reader, writer = await asyncio.open_connection(host, int(port_text), ssl=ssl_context, server_hostname=host if ssl_context else None)
+    reader, writer = await asyncio.open_connection(host, int(port_value), ssl=ssl_context, server_hostname=host if ssl_context else None)
     if protocol in {"http", "https"}:
         token = ""
         if auth:

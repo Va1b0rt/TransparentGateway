@@ -15,8 +15,10 @@ def base_score(entry: dict[str, Any]) -> float:
 
 
 def subnet_key(entry: dict[str, Any]) -> str | None:
-    endpoint = str(entry.get("endpoint", ""))
-    host = endpoint.rsplit(":", 1)[0]
+    host = str(entry.get("host") or "")
+    if not host:
+        endpoint = str(entry.get("endpoint", ""))
+        host = endpoint.rsplit(":", 1)[0].strip("[]")
     try:
         address = ipaddress.ip_address(host)
     except ValueError:

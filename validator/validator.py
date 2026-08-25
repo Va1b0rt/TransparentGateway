@@ -7,21 +7,25 @@ import os
 import time
 from typing import Any
 
-from connectors import ProxyCandidate, parse_candidate
+from proxy_probe import CheckTarget, classify_anonymity, direct_observation, proxy_observation
+from sources import ProxyCandidate, parse_candidate
 from storage import RAW_KEY, VALIDATED_KEY, publish_snapshot, read_snapshot
 
 
-async def probe(candidate: ProxyCandidate, timeout: float) -> dict[str, object] | None:
-    """Measure endpoint TCP reachability without exposing proxy credentials."""
-    host, port_text = candidate.endpoint.rsplit(":", 1)
-    started = time.monotonic()
+async def probe(
+    candidate: ProxyCandidate,
+    target: CheckTarget,
+    direct_identities: set[str],
+    timeout: float,
+) -> dict[str, object] | None:
+    """Verify the proxy protocol, make an echo request, and reject IP leakage."""
     try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection(host, int(port_text)), timeout)
-        writer.close()
-        await writer.wait_closed()
-        latency_ms = max(1, round((time.monotonic() - started) * 1000))
-        return candidate.snapshot(latency_ms)
-    except (OSError, asyncio.TimeoutError):
+        observation, latency_ms = await proxy_observation(candidate, target, timeout)
+        anonymity_level = classify_anonymity(observation, direct_identities)
+        if anonymity_level is None:
+            return None
+        return candidate.snapshot(latency_ms, anonymity_level=anonymity_level)
+    except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):
         return None
 
 
@@ -51,10 +55,21 @@ async def cycle(client: Any) -> tuple[int, int] | None:
     if concurrency < 1:
         raise ValueError("VALIDATION_CONCURRENCY must be positive")
     semaphore = asyncio.Semaphore(concurrency)
+    timeout = float(os.getenv("PROXY_VALIDATION_TIMEOUT_SECONDS", "8"))
+    if timeout <= 0:
+        raise ValueError("PROXY_VALIDATION_TIMEOUT_SECONDS must be positive")
+    target = CheckTarget.parse(os.getenv("ANONYMITY_CHECK_URL", ""))
+    baseline = await direct_observation(target, timeout)
+    direct_identities = {baseline.peer}
+    direct_identities.update(
+        value.strip()
+        for value in os.getenv("ANONYMITY_CLIENT_IPS", "").split(",")
+        if value.strip()
+    )
 
     async def guarded(candidate: ProxyCandidate) -> dict[str, object] | None:
         async with semaphore:
-            return await probe(candidate, float(os.getenv("PROXY_TCP_TIMEOUT_SECONDS", "3")))
+            return await probe(candidate, target, direct_identities, timeout)
 
     checked = await asyncio.gather(*(guarded(candidate) for candidate in candidates))
     entries: list[dict[str, object]] = []

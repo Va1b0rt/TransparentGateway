@@ -55,6 +55,17 @@ def test_ranker_penalises_repeated_asn_and_subnet():
     assert all("score" in entry and "base_score" in entry for entry in ranked)
 
 
+def test_ranker_understands_canonical_ipv6_host():
+    entries = [candidate("[2001:db8::1]:1080", 10, asn="AS1")]
+    entries[0]["host"] = "2001:db8::1"
+    entries[0]["port"] = 1080
+    entries[0]["protocol"] = "socks5"
+
+    ranked = rank_entries(entries, reserve_size=1)
+
+    assert len(ranked) == 1
+
+
 def test_ranker_publishes_configurable_active_and_reserve_pools(monkeypatch):
     client = FakeRedis()
     client.values[VALIDATED_KEY] = json.dumps({
