@@ -7,7 +7,7 @@ import os
 import time
 from typing import Any
 
-from ranking import rank_entries
+from ranking import rank_entries, select_active_entries
 from storage import RESERVE_KEY, VALIDATED_KEY, publish_active_snapshot, publish_snapshot, read_snapshot
 
 
@@ -29,21 +29,35 @@ async def cycle(client: Any) -> tuple[int, int] | None:
     if pool_size > reserve_size:
         raise ValueError("POOL_SIZE must be less than or equal to RESERVE_SIZE")
     min_score = float(os.getenv("MIN_SCORE_THRESHOLD", "0"))
+    unknown_asn_penalty = float(os.getenv("UNKNOWN_ASN_PENALTY", "2"))
+    max_unknown_asn_ratio = float(os.getenv("MAX_UNKNOWN_ASN_RATIO", "0.1"))
 
     entries = [dict(entry) for entry in validated["entries"] if isinstance(entry, dict)]
-    ranked = rank_entries(entries, reserve_size=reserve_size, min_score=min_score)
+    ranked = rank_entries(
+        entries,
+        reserve_size=reserve_size,
+        min_score=min_score,
+        unknown_asn_penalty=unknown_asn_penalty,
+    )
+    active_entries = select_active_entries(
+        ranked,
+        pool_size=pool_size,
+        max_unknown_asn_ratio=max_unknown_asn_ratio,
+    )
     generated_at = int(time.time())
     reserve_snapshot = {
         "generated_at": generated_at,
         "entries": ranked,
         "min_score_threshold": min_score,
         "reserve_size": reserve_size,
+        "unknown_asn_penalty": unknown_asn_penalty,
     }
     active_snapshot = {
         "generated_at": generated_at,
-        "entries": ranked[:pool_size],
+        "entries": active_entries,
         "min_score_threshold": min_score,
         "pool_size": pool_size,
+        "max_unknown_asn_ratio": max_unknown_asn_ratio,
     }
     await publish_snapshot(client, RESERVE_KEY, reserve_snapshot)
     await publish_active_snapshot(client, active_snapshot)

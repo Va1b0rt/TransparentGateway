@@ -50,8 +50,11 @@ The gateway cannot see whether an application used syntax such as `dig name` or
 - **fetcher** loads candidates concurrently from explicitly active, authorised
   inventory and HTTPS feed connectors.
 - **validator** performs bounded asynchronous HTTP(S)/SOCKS4/SOCKS5 checks through
-  each proxy, rejects client-IP leaks, and records end-to-end latency plus the
-  consecutive-success count.
+  each proxy (including configured credentials), rejects client-IP leaks, enriches
+  the observed exit IP from a local ASN database, and records end-to-end latency
+  plus the consecutive-success count.
+- **asn-updater** downloads the PDDL-licensed origin ASN MMDB, verifies its
+  published SHA-256 checksum, and atomically refreshes the shared local database.
 - **ranker** applies latency/stability scoring, optional ASN/subnet diversity
   penalties, and publishes configurable reserve and active pools.
 - **redis** stores the latest validated pool with AOF persistence.
@@ -81,7 +84,7 @@ ranker   ──→ proxy_pool:reserve:v1
                     └──→ transparent-gateway:validated:v1 (gateway compatibility)
 ```
 
-Fetcher, validator, and ranker run as separate unprivileged Compose services.
+Fetcher, ASN updater, validator, and ranker run as separate unprivileged Compose services.
 They exchange complete JSON snapshots through Redis instead of calling each
 other directly. Every publication writes a unique temporary key and atomically
 renames it over the previous snapshot, so readers never observe a partial pool.
@@ -90,9 +93,9 @@ The connector config provides two explicit lists: connector types permitted for
 this deployment and connector instances that are active. An active connector must
 also exist in the in-code registry and in `allowed_connector_types`.
 
-The ranker combines measured latency and a bounded consecutive-success bonus. If
-an authorised source supplies `metadata.asn`, repeated ASN values are penalised;
-repeated IPv4 `/24` or IPv6 `/48` networks are also penalised. A pool manager may
+The ranker combines measured latency and a bounded consecutive-success bonus.
+Repeated verified exit ASN values are penalised; repeated IPv4 `/24` or IPv6
+`/48` networks are also penalised. A pool manager may
 consume the reserve key, while the included egress relay consumes the compatibility
 active key.
 
@@ -104,7 +107,8 @@ candidate:
 
 - HTTP and TLS-wrapped HTTP proxy requests;
 - SOCKS4/SOCKS4a `CONNECT`;
-- SOCKS5 no-auth negotiation and `CONNECT`, with proxy-side hostname resolution;
+- SOCKS5 no-auth or username/password negotiation and `CONNECT`, with proxy-side
+  hostname resolution;
 - an HTTP or HTTPS request through the established route.
 
 The validator first requests the same echo endpoint directly to learn its own
@@ -119,6 +123,17 @@ The echo service must return JSON with `backend_peer` (or `origin`) and a `heade
 object. `test-echo.py` supplies this contract for the isolated lab. Keep this
 endpoint under your control: a third-party checker sees every candidate exit IP
 and becomes part of the validation trust boundary.
+
+ASN enrichment uses the exit address observed by that endpoint, not an ASN claimed
+by a source connector. Source-provided ASN is retained only as `source_asn` for
+diagnostics. The ranker reads verified `network.asn`; unknown values are penalised
+and capped in the active pool. If the local MMDB is missing, invalid, or stale, the
+validator leaves the previous complete snapshot in place.
+
+When a candidate has `credential_ref`, both the validator and egress relay resolve
+it from the same read-only credential store. HTTP(S) supports Basic proxy auth,
+SOCKS5 supports username/password negotiation, and SOCKS4 uses the username as its
+User ID. Secrets are never written to Redis or logs.
 
 ### DNS relays
 
@@ -180,7 +195,11 @@ Important environment variables:
 | `ANONYMITY_CHECK_URL` | Operator-controlled JSON echo endpoint used directly and through every candidate. |
 | `ANONYMITY_CLIENT_IPS` | Optional comma-separated additional direct/NAT IPs that must never be leaked. |
 | `PROXY_VALIDATION_TIMEOUT_SECONDS` | End-to-end timeout for the direct check and each proxy check. |
+| `ASN_MAX_DATABASE_AGE_SECONDS` | Maximum allowed age of the local verified ASN MMDB. |
+| `ASN_UPDATE_INTERVAL_SECONDS` | Interval between checksum-verified ASN database refreshes. |
 | `RANK_INTERVAL_SECONDS` | Interval between reserve/active pool publications. |
+| `UNKNOWN_ASN_PENALTY` | Score divisor applied when an exit IP has no verified ASN. |
+| `MAX_UNKNOWN_ASN_RATIO` | Maximum fraction of unknown-ASN candidates admitted to the active pool. |
 
 ### Pool sizing
 
@@ -195,7 +214,7 @@ MIN_SCORE_THRESHOLD=0
 ```
 
 The ranker publishes at most `RESERVE_SIZE` scored candidates and copies the first
-`POOL_SIZE` entries into the active snapshot. Keep `POOL_SIZE` less than or equal
+eligible `POOL_SIZE` entries into the active snapshot. Keep `POOL_SIZE` less than or equal
 to `RESERVE_SIZE` so a reserve remains available after a failed endpoint enters
 cooldown. Set `MIN_SCORE_THRESHOLD` when quality should determine the final count;
 the active pool may then contain fewer than `POOL_SIZE` entries.
@@ -204,8 +223,8 @@ Choose these values from observed connection concurrency, upstream capacity, and
 the desired failure headroom rather than copying `150`. For a small lab, a pool
 of 8–20 endpoints is usually enough; larger authorised fleets may benefit from a
 larger reserve. The current implementation ranks authorised candidates by
-protocol-level reachability, anonymity, latency, stability, and supplied network
-metadata. It does not perform public-proxy discovery.
+protocol-level reachability, anonymity, latency, stability, and network metadata
+derived from the observed exit IP. It does not perform public-proxy discovery.
 
 ### Connector registry
 
@@ -243,9 +262,9 @@ compatibility. An unauthenticated SOCKS5 candidate can be as small as:
 ```
 
 Supported values for `protocol` are `http`, `https`, `socks4`, and `socks5`.
-Proxy authentication is optional. When a gateway connection needs credentials,
-the inventory carries only an opaque reference and the gateway resolves it from
-the ignored secret file:
+Proxy authentication is optional. When validation or a gateway connection needs
+credentials, the inventory carries only an opaque reference and both services
+resolve it from the ignored secret file:
 
 ```json
 {
@@ -257,10 +276,12 @@ the ignored secret file:
 ```
 
 Keep `.env`, the real inventory, and `secrets/proxy-credentials.json` out of version
-control. Restrict the credentials file to its owner:
+control. Allow the container's unprivileged group to read the credentials without
+making the file world-readable (the Compose services run with GID `65532`):
 
 ```sh
-chmod 600 secrets/proxy-credentials.json
+chown root:65532 secrets/proxy-credentials.json
+chmod 640 secrets/proxy-credentials.json
 ```
 
 ## Network setup
@@ -396,8 +417,9 @@ behaviour, use the end-to-end VLAN tests above.
 - explicit resolvers must accept DNS over TCP on port 53;
 - upstream availability can change, so production use requires monitoring and a
   sufficiently reliable authorised proxy pool;
-- authenticated-only proxies need a credential-aware validation policy; the
-  default validator deliberately offers SOCKS5 no-auth and sends no proxy auth;
+- authenticated proxies are supported with HTTP Basic, SOCKS5 username/password,
+  and the SOCKS4 User ID; Digest, NTLM, Negotiate, and other schemes are not
+  implemented;
 - anonymity validation depends on the correctness and availability of the
   configured operator-controlled echo endpoint;
 - DNS/TCP capability is confirmed separately by the gateway when a proxy is used.

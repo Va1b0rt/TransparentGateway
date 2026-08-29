@@ -14,31 +14,13 @@ import os
 import socket
 import ssl
 import time
-from pathlib import Path
 from typing import Any
+
+from common.credentials import CredentialStore
 
 SNAPSHOT_KEY = "transparent-gateway:validated:v1"
 DNS_TCP_CAPABLE_KEY = "transparent-gateway:dns-tcp53-capable:v1"
 MAX_HEADERS = 16 * 1024
-
-
-class Credentials:
-    def __init__(self, path: str) -> None:
-        self.path, self.mtime, self.values = Path(path), None, {}
-
-    def get(self, reference: str | None) -> tuple[str, str] | None:
-        if reference is None:
-            return None
-        stat = self.path.stat()
-        if self.mtime != stat.st_mtime_ns:
-            raw = json.loads(self.path.read_text())
-            if not isinstance(raw, dict):
-                raise ValueError("credential store must be an object")
-            self.values, self.mtime = raw, stat.st_mtime_ns
-        item = self.values.get(reference)
-        if not isinstance(item, dict) or not isinstance(item.get("username"), str) or not isinstance(item.get("password"), str):
-            raise ValueError("credential reference is unavailable")
-        return item["username"], item["password"]
 
 
 class Pool:
@@ -120,7 +102,7 @@ def target_from_connect(header: bytes) -> tuple[str, int]:
         raise ValueError("only CONNECT host:port is accepted") from None
 
 
-async def connect_upstream(candidate: dict[str, Any], target: tuple[str, int], credentials: Credentials) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def connect_upstream(candidate: dict[str, Any], target: tuple[str, int], credentials: CredentialStore) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     endpoint, protocol = str(candidate["endpoint"]), str(candidate["protocol"])
     host = str(candidate.get("host") or "")
     port_value = candidate.get("port")
@@ -198,7 +180,7 @@ async def connect_upstream(candidate: dict[str, Any], target: tuple[str, int], c
     return reader, writer
 
 
-async def probe_dns_tcp(candidate: dict[str, Any], target: tuple[str, int], credentials: Credentials) -> None:
+async def probe_dns_tcp(candidate: dict[str, Any], target: tuple[str, int], credentials: CredentialStore) -> None:
     """Verify DNS-over-TCP in a disposable tunnel; do not consume the client tunnel."""
     reader, writer = await connect_upstream(candidate, target, credentials)
     try:
@@ -225,7 +207,7 @@ async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> No
         writer.close()
 
 
-async def handle(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, pool: Pool, credentials: Credentials) -> None:
+async def handle(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, pool: Pool, credentials: CredentialStore) -> None:
     try:
         request = await asyncio.wait_for(client_reader.readuntil(b"\r\n\r\n"), 10)
         if len(request) > MAX_HEADERS:
@@ -266,7 +248,7 @@ async def handle(client_reader: asyncio.StreamReader, client_writer: asyncio.Str
 
 async def main() -> None:
     pool = Pool(os.environ["REDIS_URL"], int(os.getenv("POOL_SIZE", "150")))
-    credentials = Credentials(os.getenv("PROXY_CREDENTIALS_FILE", "/run/secrets/proxy-credentials.json"))
+    credentials = CredentialStore(os.getenv("PROXY_CREDENTIALS_FILE", "/run/secrets/proxy-credentials.json"))
     server = await asyncio.start_server(lambda r, w: handle(r, w, pool, credentials), "127.0.0.1", int(os.getenv("EGRESS_RELAY_PORT", "12000")), limit=MAX_HEADERS)
     async with server:
         await server.serve_forever()

@@ -7,7 +7,7 @@ VALIDATOR_DIR = str(Path(__file__).parents[1] / "validator")
 sys.path.insert(0, VALIDATOR_DIR)
 
 from ranker import cycle as rank_cycle
-from ranking import rank_entries
+from ranking import asn_key, rank_entries, select_active_entries
 from storage import ACTIVE_KEY, GATEWAY_ACTIVE_KEY, RESERVE_KEY, VALIDATED_KEY, publish_snapshot
 
 
@@ -31,7 +31,14 @@ def candidate(endpoint, latency_ms, *, asn, success_streak=1):
         "protocol": "http",
         "source": "authorised-test",
         "credential_ref": None,
-        "metadata": {"asn": asn},
+        "metadata": {},
+        "exit_ip": endpoint.rsplit(":", 1)[0].strip("[]"),
+        "network": {
+            "asn_status": "verified",
+            "asn": asn,
+            "organization": "test",
+            "prefix": None,
+        },
         "address": f"http://{endpoint}",
         "latency_ms": latency_ms,
         "success_streak": success_streak,
@@ -66,6 +73,31 @@ def test_ranker_understands_canonical_ipv6_host():
     assert len(ranked) == 1
 
 
+def test_ranker_ignores_untrusted_source_asn_and_uses_verified_exit_asn():
+    entry = candidate("10.0.0.1:3128", 10, asn="AS64500")
+    entry["metadata"] = {"asn": "AS-SPOOFED", "source_asn": "AS-SOURCE"}
+
+    assert asn_key(entry) == "AS64500"
+
+
+def test_active_pool_caps_unknown_asn_candidates():
+    ranked = [candidate(f"10.0.{index}.1:3128", 10 + index, asn=f"AS{index}") for index in range(8)]
+    unknown = [candidate(f"10.1.{index}.1:3128", 1, asn=f"AS{index + 100}") for index in range(3)]
+    for entry in unknown:
+        entry["network"] = {
+            "asn_status": "unknown",
+            "asn": None,
+            "organization": None,
+            "prefix": None,
+        }
+    mixed = [unknown[0], *ranked, *unknown[1:]]
+
+    active = select_active_entries(mixed, pool_size=10, max_unknown_asn_ratio=0.1)
+
+    assert len(active) == 9
+    assert sum(asn_key(entry) is None for entry in active) == 1
+
+
 def test_ranker_publishes_configurable_active_and_reserve_pools(monkeypatch):
     client = FakeRedis()
     client.values[VALIDATED_KEY] = json.dumps({
@@ -79,6 +111,7 @@ def test_ranker_publishes_configurable_active_and_reserve_pools(monkeypatch):
     monkeypatch.setenv("POOL_SIZE", "2")
     monkeypatch.setenv("RESERVE_SIZE", "3")
     monkeypatch.setenv("MIN_SCORE_THRESHOLD", "0")
+    monkeypatch.setenv("MAX_UNKNOWN_ASN_RATIO", "0.1")
 
     reserve_count, active_count = asyncio.run(rank_cycle(client))
 

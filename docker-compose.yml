@@ -14,7 +14,9 @@ services:
       retries: 5
 
   validator:
-    build: ./validator
+    build:
+      context: .
+      dockerfile: validator/Dockerfile
     restart: unless-stopped
     environment:
       REDIS_URL: ${VALIDATOR_REDIS_URL}
@@ -23,15 +25,48 @@ services:
       ANONYMITY_CHECK_URL: ${ANONYMITY_CHECK_URL}
       ANONYMITY_CLIENT_IPS: ${ANONYMITY_CLIENT_IPS:-}
       PROXY_VALIDATION_TIMEOUT_SECONDS: ${PROXY_VALIDATION_TIMEOUT_SECONDS:-8}
+      PROXY_CREDENTIALS_FILE: /run/secrets/proxy-credentials.json
+      ASN_DATABASE_PATH: /asn-db/origin-asn.mmdb
+      ASN_MAX_DATABASE_AGE_SECONDS: ${ASN_MAX_DATABASE_AGE_SECONDS:-259200}
     depends_on:
       redis:
         condition: service_healthy
+      asn-updater:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    volumes:
+      - asn_data:/asn-db:ro
+      - ./secrets:/run/secrets:ro
+
+  asn-updater:
+    build:
+      context: .
+      dockerfile: validator/Dockerfile
+    command: ["python", "/app/asn_updater.py"]
+    restart: unless-stopped
+    environment:
+      ASN_DATABASE_PATH: /asn-db/origin-asn.mmdb
+      ASN_DATABASE_URL: ${ASN_DATABASE_URL:-https://github.com/sapics/ip-location-db/releases/download/latest/origin-asn.mmdb}
+      ASN_CHECKSUM_URL: ${ASN_CHECKSUM_URL:-https://github.com/sapics/ip-location-db/releases/download/checksum/origin-asn.mmdb.sha256}
+      ASN_UPDATE_INTERVAL_SECONDS: ${ASN_UPDATE_INTERVAL_SECONDS:-86400}
+    volumes:
+      - asn_data:/asn-db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/asn-db/origin-asn.mmdb'; assert os.path.getsize(p)>0 and time.time()-os.path.getmtime(p)<259200"]
+      interval: 30s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
     security_opt:
       - no-new-privileges:true
     cap_drop: ["ALL"]
 
   fetcher:
-    build: ./validator
+    build:
+      context: .
+      dockerfile: validator/Dockerfile
     command: ["python", "/app/fetcher.py"]
     restart: unless-stopped
     environment:
@@ -49,7 +84,9 @@ services:
     cap_drop: ["ALL"]
 
   ranker:
-    build: ./validator
+    build:
+      context: .
+      dockerfile: validator/Dockerfile
     command: ["python", "/app/ranker.py"]
     restart: unless-stopped
     environment:
@@ -57,6 +94,8 @@ services:
       POOL_SIZE: ${POOL_SIZE}
       RESERVE_SIZE: ${RESERVE_SIZE}
       MIN_SCORE_THRESHOLD: ${MIN_SCORE_THRESHOLD:-0}
+      UNKNOWN_ASN_PENALTY: ${UNKNOWN_ASN_PENALTY:-2}
+      MAX_UNKNOWN_ASN_RATIO: ${MAX_UNKNOWN_ASN_RATIO:-0.1}
       RANK_INTERVAL_SECONDS: ${RANK_INTERVAL_SECONDS:-60}
     depends_on:
       redis:
@@ -66,7 +105,9 @@ services:
     cap_drop: ["ALL"]
 
   gateway:
-    build: ./gateway
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
     network_mode: host
     restart: on-failure
     cap_add: ["NET_ADMIN"]
@@ -93,3 +134,4 @@ services:
 
 volumes:
   redis_data:
+  asn_data:

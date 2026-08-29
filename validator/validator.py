@@ -7,6 +7,8 @@ import os
 import time
 from typing import Any
 
+from asn_resolver import AsnResolver
+from common.credentials import CredentialStore
 from proxy_probe import CheckTarget, classify_anonymity, direct_observation, proxy_observation
 from sources import ProxyCandidate, parse_candidate
 from storage import RAW_KEY, VALIDATED_KEY, publish_snapshot, read_snapshot
@@ -17,16 +19,32 @@ async def probe(
     target: CheckTarget,
     direct_identities: set[str],
     timeout: float,
+    credentials: CredentialStore,
+    asn_resolver: AsnResolver,
 ) -> dict[str, object] | None:
     """Verify the proxy protocol, make an echo request, and reject IP leakage."""
     try:
-        observation, latency_ms = await proxy_observation(candidate, target, timeout)
+        auth = credentials.get(candidate.credential_ref)
+        observation, latency_ms = await proxy_observation(
+            candidate,
+            target,
+            timeout,
+            auth,
+        )
         anonymity_level = classify_anonymity(observation, direct_identities)
         if anonymity_level is None:
             return None
-        return candidate.snapshot(latency_ms, anonymity_level=anonymity_level)
     except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):
         return None
+    snapshot = candidate.snapshot(latency_ms, anonymity_level=anonymity_level)
+    metadata = dict(snapshot.get("metadata") or {})
+    source_asn = metadata.pop("asn", None)
+    if source_asn:
+        metadata["source_asn"] = str(source_asn)
+    snapshot["metadata"] = metadata
+    snapshot["exit_ip"] = observation.peer
+    snapshot["network"] = asn_resolver.resolve(observation.peer)
+    return snapshot
 
 
 async def cycle(client: Any) -> tuple[int, int] | None:
@@ -67,11 +85,22 @@ async def cycle(client: Any) -> tuple[int, int] | None:
         if value.strip()
     )
 
-    async def guarded(candidate: ProxyCandidate) -> dict[str, object] | None:
-        async with semaphore:
-            return await probe(candidate, target, direct_identities, timeout)
+    credentials = CredentialStore(
+        os.getenv("PROXY_CREDENTIALS_FILE", "/run/secrets/proxy-credentials.json")
+    )
+    with AsnResolver.from_environment() as asn_resolver:
+        async def guarded(candidate: ProxyCandidate) -> dict[str, object] | None:
+            async with semaphore:
+                return await probe(
+                    candidate,
+                    target,
+                    direct_identities,
+                    timeout,
+                    credentials,
+                    asn_resolver,
+                )
 
-    checked = await asyncio.gather(*(guarded(candidate) for candidate in candidates))
+        checked = await asyncio.gather(*(guarded(candidate) for candidate in candidates))
     entries: list[dict[str, object]] = []
     for result in checked:
         if result is None:

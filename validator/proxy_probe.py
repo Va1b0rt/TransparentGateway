@@ -9,6 +9,7 @@ direct identity.
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import json
 import socket
@@ -149,11 +150,24 @@ def _parse_echo(body: bytes) -> EchoObservation:
     return EchoObservation(peer, headers)
 
 
-def _request_bytes(target: CheckTarget, *, absolute: bool) -> bytes:
+def _basic_proxy_authorization(auth: tuple[str, str] | None) -> str:
+    if auth is None:
+        return ""
+    encoded = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode("ascii")
+    return f"Proxy-Authorization: Basic {encoded}\r\n"
+
+
+def _request_bytes(
+    target: CheckTarget,
+    *,
+    absolute: bool,
+    proxy_auth: tuple[str, str] | None = None,
+) -> bytes:
     request_target = target.absolute_url if absolute else target.path
     return (
         f"GET {request_target} HTTP/1.1\r\n"
         f"Host: {target.authority}\r\n"
+        f"{_basic_proxy_authorization(proxy_auth) if absolute else ''}"
         "Accept: application/json\r\n"
         "User-Agent: transparent-gateway-validator/1\r\n"
         "Connection: close\r\n\r\n"
@@ -165,11 +179,19 @@ async def _enable_target_tls(writer: asyncio.StreamWriter, target: CheckTarget) 
 
 
 async def _http_proxy_tunnel(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, target: CheckTarget
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    target: CheckTarget,
+    auth: tuple[str, str] | None,
 ) -> None:
     authority = target.authority
     writer.write(
-        f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nConnection: keep-alive\r\n\r\n".encode("ascii")
+        (
+            f"CONNECT {authority} HTTP/1.1\r\n"
+            f"Host: {authority}\r\n"
+            f"{_basic_proxy_authorization(auth)}"
+            "Connection: keep-alive\r\n\r\n"
+        ).encode("ascii")
     )
     await writer.drain()
     status, _, _ = await _read_headers(reader)
@@ -178,13 +200,32 @@ async def _http_proxy_tunnel(
 
 
 async def _socks5_tunnel(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, target: CheckTarget
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    target: CheckTarget,
+    auth: tuple[str, str] | None,
 ) -> None:
-    writer.write(b"\x05\x01\x00")  # SOCKS5, one method, no authentication.
+    method = b"\x02" if auth else b"\x00"
+    writer.write(b"\x05\x01" + method)
     await writer.drain()
     response = await reader.readexactly(2)
-    if response != b"\x05\x00":
-        raise OSError("SOCKS5 proxy does not allow unauthenticated access")
+    if response != b"\x05" + method:
+        raise OSError("SOCKS5 proxy rejected the required authentication method")
+    if auth:
+        username, password = auth
+        raw_username, raw_password = username.encode(), password.encode()
+        if not 1 <= len(raw_username) <= 255 or not 1 <= len(raw_password) <= 255:
+            raise ValueError("SOCKS5 credentials must contain 1..255 bytes")
+        writer.write(
+            b"\x01"
+            + bytes([len(raw_username)])
+            + raw_username
+            + bytes([len(raw_password)])
+            + raw_password
+        )
+        await writer.drain()
+        if await reader.readexactly(2) != b"\x01\x00":
+            raise OSError("SOCKS5 username/password authentication failed")
     try:
         packed = socket.inet_pton(socket.AF_INET, target.host)
         address = b"\x01" + packed
@@ -214,15 +255,28 @@ async def _socks5_tunnel(
 
 
 async def _socks4_tunnel(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, target: CheckTarget
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    target: CheckTarget,
+    auth: tuple[str, str] | None,
 ) -> None:
+    username = auth[0].encode() if auth else b""
+    if len(username) > 255 or b"\x00" in username:
+        raise ValueError("SOCKS4 username is invalid")
     try:
         address = socket.inet_aton(target.host)
         suffix = b""
     except OSError:
         address = b"\x00\x00\x00\x01"
         suffix = target.host.encode("idna") + b"\x00"
-    writer.write(b"\x04\x01" + target.port.to_bytes(2, "big") + address + b"\x00" + suffix)
+    writer.write(
+        b"\x04\x01"
+        + target.port.to_bytes(2, "big")
+        + address
+        + username
+        + b"\x00"
+        + suffix
+    )
     await writer.drain()
     response = await reader.readexactly(8)
     if response[1] != 0x5A:
@@ -247,7 +301,10 @@ async def direct_observation(target: CheckTarget, timeout: float) -> EchoObserva
 
 
 async def proxy_observation(
-    candidate: ProxyCandidate, target: CheckTarget, timeout: float
+    candidate: ProxyCandidate,
+    target: CheckTarget,
+    timeout: float,
+    auth: tuple[str, str] | None = None,
 ) -> tuple[EchoObservation, int]:
     """Perform a real request through HTTP(S), SOCKS4, or SOCKS5."""
     loop = asyncio.get_running_loop()
@@ -264,16 +321,22 @@ async def proxy_observation(
         try:
             absolute_request = candidate.protocol in {"http", "https"} and target.scheme == "http"
             if candidate.protocol in {"http", "https"} and target.scheme == "https":
-                await _http_proxy_tunnel(reader, writer, target)
+                await _http_proxy_tunnel(reader, writer, target, auth)
             elif candidate.protocol == "socks5":
-                await _socks5_tunnel(reader, writer, target)
+                await _socks5_tunnel(reader, writer, target, auth)
             elif candidate.protocol == "socks4":
-                await _socks4_tunnel(reader, writer, target)
+                await _socks4_tunnel(reader, writer, target, auth)
             elif candidate.protocol not in {"http", "https"}:
                 raise ValueError("unsupported proxy protocol")
             if target.scheme == "https":
                 await _enable_target_tls(writer, target)
-            writer.write(_request_bytes(target, absolute=absolute_request))
+            writer.write(
+                _request_bytes(
+                    target,
+                    absolute=absolute_request,
+                    proxy_auth=auth if absolute_request else None,
+                )
+            )
             await writer.drain()
             return _parse_echo(await _read_http_response(reader))
         finally:

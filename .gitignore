@@ -6,5 +6,6 @@ __pycache__/
 runtime/
 inventory/connectors.json
 inventory/upstreams.jsonl
+inventory/upstreams.jsonl.disabled-*
 secrets/*.json*
 !secrets/*.json.example

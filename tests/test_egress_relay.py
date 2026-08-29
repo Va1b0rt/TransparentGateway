@@ -52,7 +52,12 @@ def test_relay_adds_upstream_basic_auth_from_secret_ref(tmp_path):
                 pass
 
         gateway_server = await asyncio.start_server(
-            lambda reader, writer: relay.handle(reader, writer, FixedPool(), relay.Credentials(str(secret_file))),
+            lambda reader, writer: relay.handle(
+                reader,
+                writer,
+                FixedPool(),
+                relay.CredentialStore(str(secret_file)),
+            ),
             "127.0.0.1", 0,
         )
         gateway_port = gateway_server.sockets[0].getsockname()[1]
