@@ -33,8 +33,11 @@ def snapshot():
         path=root/name
         info=path.stat()
         files[name]=[hashlib.sha256(path.read_bytes()).hexdigest(),info.st_ino,info.st_mtime_ns,info.st_mode,info.st_uid,info.st_gid]
+    # Packet counters and dump timestamps change during normal traffic.
+    rules = '\n'.join(re.sub(r'\[\d+:\d+\]', '[COUNTERS]', line)
+                      for line in run(['iptables-save']).splitlines() if not line.startswith('#'))
     return {'containers':sorted(containers),'fixture':sorted(fixture),'redis_run_id':run_id,
-            'files':files,'iptables':run(['iptables-save']), 'policy_routes':run(['ip','-4','rule','show']),
+            'files':files,'iptables':rules, 'policy_routes':run(['ip','-4','rule','show']),
             'tproxy_routes':run(['ip','-4','route','show','table','100'])}
 
 
@@ -42,8 +45,8 @@ marker = 'tg:deployment:repeat:'+uuid.uuid4().hex
 value = uuid.uuid4().hex
 try:
     before=snapshot()
-    if len(before['containers']) != 6:
-        raise RuntimeError('expected six application containers before repeat')
+    if len(before['containers']) != 6 or len(before['fixture']) != 2:
+        raise RuntimeError('expected six application and two fixture containers before repeat')
     if run(redis+['SET',marker,value,'EX','600','NX']) != 'OK':
         raise RuntimeError('could not create verification marker')
     command=['python3',str(Path(__file__).with_name('deploy.py')),'--source',args.source,'--commit',args.commit,'--lab-fixture']
