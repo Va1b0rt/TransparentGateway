@@ -199,9 +199,16 @@ def deploy(args):
                                 0 if name == '.env' else 65532)
     compose = ['docker','compose','--project-name','transparent-gateway','--project-directory',str(target),
                '--env-file',str(target/'.env'),'-f',str(target/'docker-compose.yml')]
+    if args.lab_fixture:
+        compose += ['-f',str(target/'deploy/lab/gateway.override.yml')]
     run(compose+['config','--quiet'])
     print(f'COMMIT {args.commit}\nPASS docker compose config --quiet\nCONFIG_FILES_CHANGED {changed}', flush=True)
     before = set(run(compose+['ps','--all','--quiet']).splitlines())
+    if args.lab_fixture:
+        fixture = ['docker','compose','--project-name','tg-lab','-f',str(target/'deploy/lab/compose.yml')]
+        run(fixture+['config','--quiet'])
+        run(fixture+['up','--detach','--wait','--wait-timeout',str(args.timeout)], timeout=args.timeout+30)
+        print('LAB_FIXTURE local echo only; validator attached to isolated fixture network', flush=True)
     print('Building application images (cached layers reused)', flush=True)
     run(compose+['build','--quiet'], timeout=args.build_timeout)
     run(compose+['up','--detach','--wait','--wait-timeout',str(args.timeout)], timeout=args.timeout+30)
@@ -236,6 +243,7 @@ def main():
     parser.add_argument('--config-dir', default='/etc/transparent-gateway/runtime')
     parser.add_argument('--timeout', type=int, default=180)
     parser.add_argument('--build-timeout', type=int, default=1200)
+    parser.add_argument('--lab-fixture', action='store_true', help='start local fixture and explicitly attach validator to its network')
     args = parser.parse_args()
     try:
         if args.timeout < 1 or args.build_timeout < 1:

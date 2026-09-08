@@ -1,0 +1,11 @@
+# Only the validator needs to enter the fixture network. Docker otherwise
+# isolates it from the separate lab Compose project's bridge.
+services:
+  validator:
+    networks:
+      - default
+      - fixture
+networks:
+  fixture:
+    external: true
+    name: tg-lab_fixture

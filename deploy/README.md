@@ -55,13 +55,20 @@ Git bundle works while the branch is unpublished), then run:
 sudo python3 /var/lib/transparent-gateway/source/deploy/lab/prepare-config.py
 sudo docker compose -p tg-lab -f /var/lib/transparent-gateway/source/deploy/lab/compose.yml up -d
 sudo python3 /var/lib/transparent-gateway/source/deploy/deploy.py \
-  --source /var/lib/transparent-gateway/source --commit FULL_COMMIT_SHA
+  --source /var/lib/transparent-gateway/source --commit FULL_COMMIT_SHA --lab-fixture
 ```
 
 The fixture address space must be unused. Its config explicitly admits unknown
 ASNs because private echo peer addresses do not have public ASNs. Do not copy this
 lab-only ranking choice into a production deployment. ASN download and checksum
 verification are still real; no invented ASN database is used.
+
+The first deployment exposed Docker's inter-bridge isolation: the host could reach
+the fixture, but the validator on the application bridge timed out. `--lab-fixture`
+now reconciles the separate fixture project and applies a reviewed override that
+adds the validator to that specific external network. Host packet-filter policy
+is not relaxed to connect arbitrary Docker networks. Reuse this flag on subsequent
+lab deployments; omitting it changes the intended validator network configuration.
 
 ## Acceptance boundary
 
