@@ -1,0 +1,31 @@
+# Local handshake/pipeline fixture, not evidence of public-exit anonymity.
+services:
+  echo:
+    image: python:3.12-slim
+    command: [python, /fixture/server.py, echo]
+    user: '65532:65532'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    volumes: ['./server.py:/fixture/server.py:ro']
+    networks:
+      fixture:
+        ipv4_address: 172.30.40.10
+  proxy:
+    image: python:3.12-slim
+    command: [python, /fixture/server.py, proxy]
+    user: '65532:65532'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    volumes: ['./server.py:/fixture/server.py:ro']
+    networks:
+      fixture:
+        ipv4_address: 172.30.40.11
+networks:
+  fixture:
+    ipam:
+      config:
+        - subnet: 172.30.40.0/24
