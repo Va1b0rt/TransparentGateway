@@ -7,6 +7,9 @@ VM_NAME=${VM_NAME:-tg-repro-01}
 STORAGE=${STORAGE:-local-lvm}
 SNIPPET_STORAGE=${SNIPPET_STORAGE:-tg-snippets}
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+USER_DATA_RENDERER=${USER_DATA_RENDERER:-$SCRIPT_DIR/render-stage1-user-data.py}
+BOOTSTRAP_STAGE=${BOOTSTRAP_STAGE:-1}
+GUEST_AGENT=${GUEST_AGENT:-0}
 SSH_PUBLIC_KEYS=${SSH_PUBLIC_KEYS:?Set SSH_PUBLIC_KEYS to a file of approved public keys}
 MGMT_CIDR=${MGMT_CIDR:-192.168.88.114/24}
 MGMT_GATEWAY=${MGMT_GATEWAY:-192.168.88.1}
@@ -25,15 +28,17 @@ if pvesh get /cluster/resources --type vm --output-format json |
 fi
 snippet_volume="$SNIPPET_STORAGE:snippets/tg-$VMID-user.yaml"
 snippet_path=$(pvesm path "$snippet_volume")
-python3 "$SCRIPT_DIR/render-stage1-user-data.py" "$VM_NAME" "$SSH_PUBLIC_KEYS" "$snippet_path"
+MGMT_CIDR="$MGMT_CIDR" MGMT_GATEWAY="$MGMT_GATEWAY" CLIENT_CIDR="$CLIENT_CIDR" LAB_CIDR="$LAB_CIDR" \
+    python3 "$USER_DATA_RENDERER" "$VM_NAME" "$SSH_PUBLIC_KEYS" "$snippet_path"
 # qm clone also rejects a VMID already allocated anywhere in the cluster.
 qm clone "$TEMPLATE_ID" "$VMID" --name "$VM_NAME" --full 1 --storage "$STORAGE"
 qm set "$VMID" --cicustom "user=$snippet_volume" \
+    --agent "enabled=$GUEST_AGENT" \
     --ipconfig0 "ip=$MGMT_CIDR,gw=$MGMT_GATEWAY" \
     --ipconfig1 "ip=$CLIENT_CIDR" --ipconfig2 "ip=$LAB_CIDR" \
     --nameserver "$MGMT_GATEWAY" --searchdomain home.lab \
     --ciupgrade 0 --onboot 0 --tags 'transparent-gateway;repro-lab' \
-    --description "Stage 1 clean clone. net0/eth0=management $MGMT_CIDR; net1/eth1=client $CLIENT_CIDR; net2/eth2=lab $LAB_CIDR. No application installed."
+    --description "Stage $BOOTSTRAP_STAGE clone. net0/eth0=management $MGMT_CIDR; net1/eth1=client $CLIENT_CIDR; net2/eth2=lab $LAB_CIDR."
 qm cloudinit update "$VMID"
 # Proxmox generates per-clone MAC bindings; do not copy another VM's network YAML.
 qm cloudinit dump "$VMID" network

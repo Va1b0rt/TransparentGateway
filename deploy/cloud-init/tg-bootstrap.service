@@ -1,0 +1,17 @@
+[Unit]
+Description=Transparent Gateway host bootstrap
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tg-bootstrap
+RemainAfterExit=yes
+TimeoutStartSec=120
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+
+# Started once by cloud-init runcmd. Application boot ordering is a later stage.
+# Do not order after cloud-final: cloud-final synchronously starts this unit.
