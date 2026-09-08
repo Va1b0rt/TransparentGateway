@@ -169,7 +169,8 @@ def deploy(args):
     if target.exists() and not (target/'.git').is_dir() and any(target.iterdir()):
         raise ValueError('destination is nonempty and not a Git checkout')
     target.mkdir(parents=True, exist_ok=True)
-    target.chmod(0o755)
+    if stat.S_IMODE(target.stat().st_mode) != 0o755:
+        target.chmod(0o755)
     if not (target/'.git').exists():
         run(['git','init',str(target)])
     git = ['git','-C',str(target)]
@@ -183,18 +184,24 @@ def deploy(args):
     for name in run(git+['ls-files']).splitlines():
         file = target/name
         if file.is_file() and not file.is_symlink():
-            file.chmod(0o755 if file.stat().st_mode & 0o111 else 0o644)
+            mode = 0o755 if file.stat().st_mode & 0o111 else 0o644
+            if stat.S_IMODE(file.stat().st_mode) != mode:
+                file.chmod(mode)
         parent = file.parent
         while parent != target:
-            parent.chmod(0o755)
+            mode = 0o750 if parent in [target/'inventory', target/'secrets'] else 0o755
+            if stat.S_IMODE(parent.stat().st_mode) != mode:
+                parent.chmod(mode)
             parent = parent.parent
     changed = 0
     for name in FILES:
         path = target/name
         path.parent.mkdir(exist_ok=True)
         if name != '.env':
-            os.chown(path.parent, 0, 65532)
-            path.parent.chmod(0o750)
+            if (path.parent.stat().st_uid,path.parent.stat().st_gid) != (0,65532):
+                os.chown(path.parent, 0, 65532)
+            if stat.S_IMODE(path.parent.stat().st_mode) != 0o750:
+                path.parent.chmod(0o750)
         changed += atomic_write(path, (config/name).read_bytes(), 0o600 if name == '.env' else 0o640,
                                 0 if name == '.env' else 65532)
     compose = ['docker','compose','--project-name','transparent-gateway','--project-directory',str(target),
