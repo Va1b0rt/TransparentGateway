@@ -7,7 +7,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    restart: unless-stopped
+    restart: "no"
     volumes: ['./server.py:/fixture/server.py:ro']
     networks:
       fixture:
@@ -19,7 +19,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    restart: unless-stopped
+    restart: "no"
     volumes: ['./server.py:/fixture/server.py:ro', '../../secrets:/run/secrets:ro']
     networks:
       fixture:

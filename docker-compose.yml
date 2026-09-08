@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: validator/Dockerfile
-    restart: unless-stopped
+    restart: "no"
     environment:
       REDIS_URL: ${VALIDATOR_REDIS_URL}
       VALIDATION_CONCURRENCY: ${VALIDATION_CONCURRENCY}
@@ -45,7 +45,7 @@ services:
       context: .
       dockerfile: validator/Dockerfile
     command: ["python", "/app/asn_updater.py"]
-    restart: unless-stopped
+    restart: "no"
     environment:
       ASN_DATABASE_PATH: /asn-db/origin-asn.mmdb
       ASN_DATABASE_URL: ${ASN_DATABASE_URL:-https://github.com/sapics/ip-location-db/releases/download/latest/origin-asn.mmdb}
@@ -68,7 +68,7 @@ services:
       context: .
       dockerfile: validator/Dockerfile
     command: ["python", "/app/fetcher.py"]
-    restart: unless-stopped
+    restart: "no"
     environment:
       REDIS_URL: ${VALIDATOR_REDIS_URL}
       CONNECTORS_CONFIG: /inventory/connectors.json
@@ -88,7 +88,7 @@ services:
       context: .
       dockerfile: validator/Dockerfile
     command: ["python", "/app/ranker.py"]
-    restart: unless-stopped
+    restart: "no"
     environment:
       REDIS_URL: ${VALIDATOR_REDIS_URL}
       POOL_SIZE: ${POOL_SIZE}
@@ -109,7 +109,7 @@ services:
       context: .
       dockerfile: gateway/Dockerfile
     network_mode: host
-    restart: on-failure
+    restart: "no"
     cap_add: ["NET_ADMIN"]
     environment:
       CLIENT_CIDR: ${CLIENT_CIDR}

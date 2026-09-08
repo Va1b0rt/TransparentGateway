@@ -1,0 +1,25 @@
+[Unit]
+Description=Transparent Gateway application
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+PartOf=docker.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStartPre=/usr/bin/python3 /opt/transparent-gateway/deploy/service.py check
+ExecStart=/usr/bin/python3 /opt/transparent-gateway/deploy/service.py serve
+ExecStopPost=/usr/bin/python3 /opt/transparent-gateway/deploy/service.py stop
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=420
+TimeoutStopSec=90
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target docker.service

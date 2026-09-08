@@ -153,3 +153,48 @@ credentials), use `sudo python3 deploy/lab/prepare-config.py --destination
 random test proxy credentials and a dummy provider token without printing them;
 the lab proxy reads the delivered store and checks Basic authentication. Transfer
 that directory using the SSH command above, then deploy with `--lab-fixture`.
+
+### Stage 5: systemd owns the application lifecycle
+
+After deploying a full release (with images already built), install its unit:
+
+```sh
+sudo python3 /var/lib/transparent-gateway/source/deploy/install-service.py \
+  --commit FULL_40_CHARACTER_SHA --lab-fixture
+sudo python3 /var/lib/transparent-gateway/source/deploy/verify-boot.py --prepare
+sudo systemctl reboot
+# Reconnect after boot; do not start Docker or Compose manually:
+sudo python3 /var/lib/transparent-gateway/source/deploy/verify-boot.py
+```
+
+`transparent-gateway.service` depends on Docker and orders after network-online.
+The installer requires the image's enabled systemd-networkd wait-online service;
+preflight also waits for the three exact declared NIC addresses and default route.
+It checks the installed commit, clean tracked files, secret permissions and quiet
+Compose validation. Service settings contain only commit/path/fixture flag, root0600.
+The unit starts existing images with no build or pull. It sends systemd READY only
+after local readiness, and records the boot ID and result. Full client/DNS/public
+readiness remains a subsequent stage.
+
+Docker restart policies are disabled for the application and lab fixture. A single
+systemd supervisor checks container presence/running/health every 15 seconds; a
+failure exits nonzero, systemd stops remaining containers and retries the stack.
+Shutdown stops containers, preserving volumes. Docker stop/restart propagates to
+the unit; enabling it for both multi-user and Docker startup brings it back when
+Docker starts. Startup retries are bounded by systemd's start limit. This avoids
+competing restart managers (see Docker's official restart-policy documentation:
+https://docs.docker.com/engine/containers/start-containers-automatically/).
+
+Deployment and supervision coordinate using the deployment lock. After updating a
+release, rerun the installer with its new full SHA to update the service pin and
+restart its supervisor. Do not reboot between deployment and this step. A normal
+repeat of the same installed release does not restart the service. `deploy.py`
+alone starts containers but is no longer a replacement for installing the boot unit.
+The supervisor monitors containers after startup, not every external readiness
+condition; loss of all upstreams needs the later full readiness/alerting work.
+
+The reboot baseline includes a namespaced Redis marker with a seven-day TTL and
+root-only file hashes. Verification requires a different boot ID, a current-boot
+readiness record, preserved containers/data/config and observed unit ordering.
+The baseline is retained for the screenshot gate; do not overwrite it to conceal
+a failed boot. `verify-secrets.py` remains available after reboot.
