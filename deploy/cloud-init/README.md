@@ -24,7 +24,8 @@ or proxy pool are deployed in this stage. The record explicitly says
 `application_deployment: pending`.
 
 The bootstrap unit is started by cloud-init once, not enabled for every boot.
-Docker and the guest agent are enabled. Runtime application ordering and full
+Docker is enabled; the static guest-agent unit is activated by its virtio device
+and explicitly started during bootstrap. Runtime application ordering and full
 readiness across reboots are later implementation stages. Ordering bootstrap after
 `cloud-final.service` would deadlock because cloud-final starts it synchronously.
 
@@ -38,6 +39,8 @@ in the evidence. The stage does not claim byte-for-byte package reproducibility.
 Transfer a committed checkout of this branch to the Proxmox node. Use a Git bundle
 when the implementation branch has not been pushed. The renderer refuses modified
 tracked source. Retain the public-key file and `tg-snippets` storage from stage 1.
+The Proxmox operator tooling requires Git (`apt-get install --no-install-recommends git`);
+our initial node did not have it, so it was installed before checking out the bundle.
 Stop the previous **test** clone before reusing its network addresses.
 
 ```sh
@@ -75,3 +78,22 @@ validate its schema. Do not display full user-data or run unrestricted Docker
 inspect in article screenshots after secrets delivery begins.
 
 Reference: [cloud-init module execution](https://docs.cloud-init.io/en/latest/reference/modules.html#runcmd).
+
+## First real package failure and correction
+
+The initial stage-2 clone (213, source `d3ec90ab80bb279eea3606253793b90067608322`)
+finished with cloud-init exit code 1. `dnsutils` is a **virtual** package in Debian
+13; cloud-init's package availability precheck found no APT candidate and did not
+resolve its provider. Docker and runcmd still ran, so their success did not prove
+that the package phase passed. The correct concrete package is `bind9-dnsutils`.
+See [Debian's virtual package entry](https://packages.debian.org/trixie/dnsutils).
+
+The corrected bootstrap additionally checks the installed status of **every**
+declared package and the presence of `dig` before recording HOST_READY. Final
+acceptance also requires cloud-init exit code 0. VM213 is retained stopped with
+its original failed state; the correction is tested on a new clone 214:
+
+```sh
+qm shutdown 213 --timeout 60
+VMID=214 VM_NAME=tg-repro-04 SSH_PUBLIC_KEYS=/root/tg-rollout/approved-keys.pub ./deploy/proxmox/clone-stage2.sh
+```

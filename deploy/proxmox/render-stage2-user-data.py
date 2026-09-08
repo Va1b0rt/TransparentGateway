@@ -29,7 +29,9 @@ if not keys or any(not k.startswith(('ssh-ed25519 ', 'ssh-rsa ', 'ecdsa-sha2-'))
     parser.error('expected approved SSH public keys')
 bootstrap = (root / 'deploy/cloud-init/bootstrap.py').read_text()
 unit = (root / 'deploy/cloud-init/tg-bootstrap.service').read_text()
+packages = ['ca-certificates', 'curl', 'git', 'python3', 'iproute2', 'iptables', 'bind9-dnsutils', 'docker.io', 'docker-compose', 'qemu-guest-agent']
 network = {
+    'required_packages': packages,
     'interfaces': {
         'eth0': str(ipaddress.IPv4Interface(os.getenv('MGMT_CIDR', '192.168.88.114/24'))),
         'eth1': str(ipaddress.IPv4Interface(os.getenv('CLIENT_CIDR', '192.168.91.1/24'))),
@@ -57,7 +59,7 @@ lines = [
     'package_upgrade: true',
     'package_reboot_if_required: false',
     'packages:',
-    *['  - ' + p for p in ['ca-certificates', 'curl', 'git', 'python3', 'iproute2', 'iptables', 'dnsutils', 'docker.io', 'docker-compose', 'qemu-guest-agent']],
+    *['  - ' + p for p in packages],
     'write_files:',
 ]
 for path, permissions, content in [
@@ -72,7 +74,7 @@ lines += [
     'runcmd:',
     '  - [systemctl, daemon-reload]',
     '  - [systemctl, enable, --now, docker.service]',
-    '  - [systemctl, enable, --now, qemu-guest-agent.service]',
+    '  - [systemctl, start, qemu-guest-agent.service]',
     '  - [systemctl, start, tg-bootstrap.service]',
     '',
 ]

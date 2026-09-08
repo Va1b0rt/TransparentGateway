@@ -37,6 +37,13 @@ def check():
     print('PASS Debian 13', flush=True)
 
     config = json.loads(CONFIG.read_text())
+    package_versions = {}
+    for package in config['required_packages']:
+        if run('dpkg-query', '-W', '-f', '${Status}', package) != 'install ok installed':
+            raise RuntimeError(f'required package is not installed: {package}')
+        package_versions[package] = run('dpkg-query', '-W', '-f', '${Version}', package)
+    run('dig', '-v')
+    print(f'PASS required packages ({len(package_versions)}), including dig', flush=True)
     addresses = {entry['ifname']: entry for entry in json.loads(run('ip', '-j', '-4', 'address'))}
     for name, expected in config['interfaces'].items():
         expected = str(ipaddress.IPv4Interface(expected))
@@ -74,6 +81,7 @@ def check():
         'docker_version': docker,
         'compose_version': compose,
         'interfaces': config['interfaces'],
+        'package_versions': package_versions,
     }
 
 
