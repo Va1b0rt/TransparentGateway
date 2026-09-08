@@ -1,12 +1,17 @@
 #!/usr/bin/python3
 """Create explicit, non-production config for the local fixture. Never overwrite."""
+import argparse
+import secrets
 import json
 import os
 from pathlib import Path
 
 assert os.geteuid() == 0, 'run with sudo'
 root = Path(__file__).resolve().parents[2]
-destination = Path('/etc/transparent-gateway/runtime')
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--destination', type=Path, default=Path('/etc/transparent-gateway/runtime'))
+destination = parser.parse_args().destination
+os.umask(0o077)
 if destination.exists():
     raise SystemExit('Config directory already exists; inspect it instead of overwriting.')
 values = {}
@@ -26,13 +31,13 @@ files = {
     '.env': ''.join(f'{key}={value}\n' for key, value in values.items()),
     'inventory/connectors.json': json.dumps({'allowed_connector_types': ['jsonl_inventory'], 'active_connectors': [
         {'type': 'jsonl_inventory', 'name': 'local-fixture', 'path': '/inventory/upstreams.jsonl'}]})+'\n',
-    'inventory/upstreams.jsonl': json.dumps({'host':'172.30.40.11', 'port':3128, 'protocol':'http', 'source':'local-fixture'})+'\n',
-    'secrets/proxy-credentials.json': '{}\n',
-    'provider-secrets/api-token': '',
+    'inventory/upstreams.jsonl': json.dumps({'host':'172.30.40.11', 'port':3128, 'protocol':'http', 'source':'local-fixture', 'credential_ref':'lab-proxy'})+'\n',
+    'secrets/proxy-credentials.json': json.dumps({'lab-proxy': {'username': 'tg-'+secrets.token_hex(8), 'password': secrets.token_urlsafe(32)}})+'\n',
+    'provider-secrets/api-token': secrets.token_urlsafe(40)+'\n',
 }
 for name, content in files.items():
     path = destination / name
     path.write_text(content)
     path.chmod(0o600 if name == '.env' else 0o640)
     os.chown(path, 0, 0 if name == '.env' else 65532)
-print('Created lab config; empty credential store; no provider token. External readiness is not enabled.')
+print('Created protected lab config with random test credentials and a dummy provider token. External readiness is not enabled.')

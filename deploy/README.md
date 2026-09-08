@@ -146,3 +146,10 @@ scan is evidence for the test values, not a guarantee about arbitrary unknown
 secrets or erased historical logs. The provider file is tested for isolation and
 unit-tested header/rotation behavior; an actual provider API needs its own
 operator-supplied credentials and is not claimed as exercised by the lab.
+
+To generate this isolated lab's operator runtime from scratch (no production
+credentials), use `sudo python3 deploy/lab/prepare-config.py --destination
+/root/tg-runtime` on the operator host. The destination must not exist. It creates
+random test proxy credentials and a dummy provider token without printing them;
+the lab proxy reads the delivered store and checks Basic authentication. Transfer
+that directory using the SSH command above, then deploy with `--lab-fixture`.
