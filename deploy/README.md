@@ -198,3 +198,41 @@ root-only file hashes. Verification requires a different boot ID, a current-boot
 readiness record, preserved containers/data/config and observed unit ordering.
 The baseline is retained for the screenshot gate; do not overwrite it to conceal
 a failed boot. `verify-secrets.py` remains available after reboot.
+
+### Stage 6: pipeline lineage and an independent client
+
+The validator embeds a unique completed-cycle ID, completion time and checked/healthy
+counts in each published snapshot; a separate `validator:last_success:v1` records the
+latest cycle with a usable upstream. Reserve and active snapshots carry their actual
+validator cycle and raw/validated source timestamps. Readiness rejects empty/stale
+pools, a missing/stale successful cycle, recently reranked stale source data and active
+entries absent from validated/reserve pools. Adjacent fresh cycles may overlap during
+publication; bounded retries handle this without pretending that ranking renews validation.
+
+On Proxmox, `SSH_PUBLIC_KEYS=/root/tg-rollout/approved-keys.pub bash
+clone-client.sh` creates VM215 from clean template9001. The script uses the sibling
+identity-only renderer. VM215 has eth0 management192.168.88.115/24 with no default
+route and eth1 client192.168.91.2/24 with sole default via192.168.91.1. No third NIC,
+application, credentials or package installation is needed. Python and SSH come from
+the Debian cloud image. Protect existing VMIDs; never start another clone at these IPs.
+
+On trusted operator ARIS, after establishing the new client's SSH host key, run:
+
+```sh
+python3 /root/TransparentGateway/deploy/verify-readiness.py \
+  --gateway tgadmin@192.168.88.114 --client tgadmin@192.168.88.115
+```
+
+The operator checks the gateway over strict SSH, then sends the code-only client probe
+through the client's SSH stdin; no SSH private keys are placed on either VM. The client
+checks its route/source IP and opens a normal TCP socket to local echo, without explicit
+proxy settings or credentials. Success requires a fresh matching request ID, the active
+upstream's observed exit IP and no proxy-auth/forwarding identity headers. Thus a gateway
+host-only CONNECT test cannot pass as client E2E evidence.
+
+`LAB_READINESS PASS` covers the six checks in stage6 against the isolated local fixture.
+Public HTTPS echo, client DNS and public-egress/no-bypass tests remain stages7–8. The
+fixture proxy is deliberately restricted to local echo and cannot serve public DNS or
+internet destinations. This result is not public/production readiness. The gateway-side
+service also uses the stronger pipeline checks at startup; update its pinned settings
+with install-service.py after deployment as described above.

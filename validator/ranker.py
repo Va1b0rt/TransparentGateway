@@ -47,6 +47,9 @@ async def cycle(client: Any) -> tuple[int, int] | None:
     generated_at = int(time.time())
     reserve_snapshot = {
         "generated_at": generated_at,
+        "validator_cycle": validated.get("validator_cycle"),
+        "source_generated_at": validated.get("generated_at"),
+        "raw_source_generated_at": validated.get("source_generated_at"),
         "entries": ranked,
         "min_score_threshold": min_score,
         "reserve_size": reserve_size,
@@ -54,6 +57,9 @@ async def cycle(client: Any) -> tuple[int, int] | None:
     }
     active_snapshot = {
         "generated_at": generated_at,
+        "validator_cycle": validated.get("validator_cycle"),
+        "source_generated_at": validated.get("generated_at"),
+        "raw_source_generated_at": validated.get("source_generated_at"),
         "entries": active_entries,
         "min_score_threshold": min_score,
         "pool_size": pool_size,

@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import time
+import uuid
 from typing import Any
 
 from asn_resolver import AsnResolver
@@ -109,12 +110,17 @@ async def cycle(client: Any) -> tuple[int, int] | None:
         result["success_streak"] = previous_streaks.get(address, 0) + 1
         entries.append(result)
 
+    completed_at = int(time.time())
+    cycle_state = {"id": uuid.uuid4().hex, "completed_at": completed_at, "healthy": len(entries), "checked": len(candidates)}
     snapshot = {
+        "validator_cycle": cycle_state,
         "generated_at": int(time.time()),
         "entries": entries,
         "source_generated_at": raw_snapshot.get("generated_at"),
     }
     await publish_snapshot(client, VALIDATED_KEY, snapshot)
+    if entries:
+        await client.set("validator:last_success:v1", json.dumps(cycle_state))
     print(f"[validator] healthy={len(entries)}/{len(candidates)}", flush=True)
     return len(entries), len(candidates)
 

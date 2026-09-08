@@ -2,6 +2,7 @@
 import json
 import socket
 import time
+from pool_health import assess
 from urllib.parse import urlsplit
 
 SERVICES = {'redis', 'fetcher', 'validator', 'ranker', 'asn-updater', 'gateway'}
@@ -32,6 +33,8 @@ def check(compose, run, values):
         if not -5 <= age <= limits[kind]:
             raise RuntimeError(kind+' snapshot stale')
         ages[kind], counts[kind], snapshots[kind] = round(age), len(data['entries']), data
+    last_success = json.loads(run(compose+['exec','-T','redis','redis-cli','--raw','GET','validator:last_success:v1']) or 'null')
+    pipeline = assess(snapshots,last_success,time.time(),limits)
     # A recently re-ranked stale validator snapshot must not count as ready.
     source_age = time.time()-snapshots['validated']['source_generated_at']
     if not -5 <= source_age <= limits['raw']+limits['validated']:
@@ -78,4 +81,5 @@ def check(compose, run, values):
         if echo.get('backend_peer') not in exits or not isinstance(echo.get('headers'), dict):
             raise RuntimeError('relay echo does not match validated exit')
     return {'scope': 'local', 'services': len(rows), 'snapshot_age_seconds': ages,
-            'pool_counts': counts, 'relay_echo': 'PASS', 'client_dns_public': 'pending'}
+            'pool_counts': counts, 'relay_echo': 'PASS', 'pipeline': pipeline,
+            'active_exit_ips': sorted(exits), 'client_dns_public': 'pending'}
