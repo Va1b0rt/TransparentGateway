@@ -38,6 +38,7 @@ def runtime_config(tmp_path):
         'inventory/connectors.json': json.dumps({'allowed_connector_types':['jsonl_inventory'],
             'active_connectors':[{'type':'jsonl_inventory','name':'test','path':'/inventory/upstreams.jsonl'}]}),
         'inventory/upstreams.jsonl': '{"host":"192.0.2.1","port":3128,"protocol":"http","credential_ref":"provider"}\n',
+        'provider-secrets/api-token': '',
         'secrets/proxy-credentials.json': '{"provider":{"username":"test","password":"not-a-real-secret"}}',
     }
     for name, text in documents.items():

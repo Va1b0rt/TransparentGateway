@@ -89,3 +89,60 @@ before/after; normal background pipeline updates are expected.
 
 References: [Compose up and volume preservation](https://docs.docker.com/reference/cli/docker/compose/up/),
 [Compose cached builds](https://docs.docker.com/reference/cli/docker/compose/build/).
+
+### Stage 4: secrets over SSH
+
+Prepare a complete runtime directory on the trusted operator host, owned by root
+with mode 0700. It contains `.env` (0600), `inventory/connectors.json`,
+`inventory/upstreams.jsonl`, `secrets/proxy-credentials.json` and
+`provider-secrets/api-token` (0600 or 0640 on the operator). No secret values go
+in command arguments, Git, cloud-init or Compose environment. `.env` carries
+non-secret deployment settings; bearer tokens in `.env` are rejected. An empty
+token file is allowed when no authenticated feed is active.
+
+With the receiver source installed at the pinned deployment commit:
+
+```sh
+sudo python3 deploy/secret-transfer.py send \
+  --host tgadmin@192.168.88.114 --directory /root/tg-runtime
+```
+
+SSH uses strict existing host-key verification and noninteractive authentication.
+The receiver accepts only the five declared files, stages and validates the entire
+set, then atomically replaces changed files under the deployment lock. It never
+prints supplied values or exception contents. A power loss during replacement of
+multiple files requires resending the same set; this is not a filesystem-wide
+transaction. Delivery does not itself deploy or restart services: run `deploy.py`
+with the intended full commit afterwards. A repeat preserves unchanged files.
+
+On the VM, canonical directory permissions are 0700; `.env` is root:root 0600;
+container-readable files are root:65532 0640 and their directories 0750. UID 65532
+is the application's container identity; the privileged gateway can also read
+its proxy store. Provider and proxy secrets are in separate directories mounted
+read-only only into their consumers. Directory mounts make atomic file rotation
+visible without retaining an obsolete file-bind inode. The lab proxy also mounts
+the proxy store, exclusively as an owned authentication test fixture.
+
+An authorised HTTPS feed can declare:
+
+```json
+{"type":"http_json_feed","name":"operator-provider",
+ "url":"https://provider.example/feed",
+ "token_file":"/run/provider-secrets/api-token"}
+```
+
+`token_env` is no longer supported. Migrate it to `token_file` and deliver the token
+file before deploying this revision. The connector rereads the file for every
+fetch, sends a bearer header, rejects secret-bearing URL forms and refuses
+redirects. Proxy snapshots contain credential references; handshake code reads
+the reloadable proxy store. Provider tokens never enter container environment.
+
+For this lab, `verify-secrets.py` checks actual file permissions and consumer
+readability, mount isolation, rejected missing/wrong/previous proxy passwords,
+successful current authentication and a fresh relay echo. It scans current/previous
+known test secret values and common base64 forms in tracked files, cloud-init,
+journal, existing container logs/inspect and Redis string values. This bounded
+scan is evidence for the test values, not a guarantee about arbitrary unknown
+secrets or erased historical logs. The provider file is tested for isolation and
+unit-tested header/rotation behavior; an actual provider API needs its own
+operator-supplied credentials and is not claimed as exercised by the lab.

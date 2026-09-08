@@ -19,7 +19,7 @@ values.update(CLIENT_CIDR='192.168.91.0/24', POOL_SIZE='1', RESERVE_SIZE='4',
               VALIDATION_INTERVAL_SECONDS='15', FETCH_INTERVAL_SECONDS='15', RANK_INTERVAL_SECONDS='5',
               ANONYMITY_CHECK_URL='http://172.30.40.10:8000/')
 destination.mkdir(mode=0o700)
-for name in ['inventory', 'secrets']:
+for name in ['inventory', 'secrets', 'provider-secrets']:
     (destination / name).mkdir(mode=0o750)
     os.chown(destination / name, 0, 65532)
 files = {
@@ -28,6 +28,7 @@ files = {
         {'type': 'jsonl_inventory', 'name': 'local-fixture', 'path': '/inventory/upstreams.jsonl'}]})+'\n',
     'inventory/upstreams.jsonl': json.dumps({'host':'172.30.40.11', 'port':3128, 'protocol':'http', 'source':'local-fixture'})+'\n',
     'secrets/proxy-credentials.json': '{}\n',
+    'provider-secrets/api-token': '',
 }
 for name, content in files.items():
     path = destination / name

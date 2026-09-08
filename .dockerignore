@@ -10,3 +10,4 @@ inventory/connectors.json
 inventory/upstreams.jsonl
 secrets
 runtime
+provider-secrets/

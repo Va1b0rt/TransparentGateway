@@ -21,7 +21,7 @@ from readiness import check as readiness_check
 SAFE_ENV = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
             'LANG': 'C.UTF-8', 'COMPOSE_PARALLEL_LIMIT': '1'}
 STATE = Path('/var/lib/transparent-gateway/deployment.json')
-FILES = ['.env', 'inventory/connectors.json', 'inventory/upstreams.jsonl', 'secrets/proxy-credentials.json']
+FILES = ['.env', 'inventory/connectors.json', 'inventory/upstreams.jsonl', 'secrets/proxy-credentials.json', 'provider-secrets/api-token']
 
 
 def run(command, timeout=120):
@@ -61,6 +61,8 @@ def validate(config, host):
         if name != '.env' and info.st_gid != 65532:
             raise ValueError('container-readable config requires GID 65532: '+name)
     values = read_env(config/'.env')
+    if values.get('PROVIDER_API_TOKEN'):
+        raise ValueError('provider tokens must be delivered through a file')
     client = ipaddress.IPv4Network(values['CLIENT_CIDR'], strict=True)
     client_interface = ipaddress.IPv4Interface(host['interfaces']['eth1'])
     if client != client_interface.network or client.overlaps(ipaddress.IPv4Interface(host['interfaces']['eth0']).network):
@@ -90,6 +92,15 @@ def validate(config, host):
     for connector in active:
         if connector.get('type') not in allowed or connector.get('type') not in ['jsonl_inventory','http_json_feed']:
             raise ValueError('connector is not explicitly allowed or registered')
+        if connector['type'] == 'http_json_feed':
+            url = urlsplit(connector.get('url', ''))
+            if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
+                raise ValueError('feed requires HTTPS URL without embedded secrets')
+            if connector.get('token_env') or connector.get('token_file') not in [None, '/run/provider-secrets/api-token']:
+                raise ValueError('feed token must reference the mounted provider token file')
+            token = (config/'provider-secrets/api-token').read_text().strip()
+            if connector.get('token_file') and (not token or any(ord(c)<33 or ord(c)>126 for c in token)):
+                raise ValueError('provider token file is empty or invalid')
         name = connector.get('name')
         if not name or name in names:
             raise ValueError('connector names must be nonempty and unique')
@@ -189,7 +200,7 @@ def deploy(args):
                 file.chmod(mode)
         parent = file.parent
         while parent != target:
-            mode = 0o750 if parent in [target/'inventory', target/'secrets'] else 0o755
+            mode = 0o750 if parent in [target/'inventory', target/'secrets', target/'provider-secrets'] else 0o755
             if stat.S_IMODE(parent.stat().st_mode) != mode:
                 parent.chmod(mode)
             parent = parent.parent

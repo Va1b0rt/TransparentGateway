@@ -34,7 +34,7 @@ async def main() -> None:
             try:
                 await cycle(client)
             except (OSError, ValueError, json.JSONDecodeError) as error:
-                print(f"[fetcher] cycle failed: {type(error).__name__}: {error}", flush=True)
+                print(f"[fetcher] cycle failed: {type(error).__name__}", flush=True)
             await asyncio.sleep(int(os.getenv("FETCH_INTERVAL_SECONDS", "900")))
     finally:
         await client.aclose()
