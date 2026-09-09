@@ -6,8 +6,9 @@ import json
 import os
 from pathlib import Path
 import uuid
+import time
 
-from deploy import FILES, atomic_write, run
+from deploy import config_files, atomic_write, run
 from readiness import check
 from service import BOOT_STATE, ROOT, commands, containers, preflight, settings
 
@@ -18,7 +19,7 @@ REDIS=['docker','exec','transparent-gateway-redis-1','redis-cli','--raw']
 def file_state():
     result={}
     for root in [ROOT,Path('/etc/transparent-gateway/runtime')]:
-        for name in FILES:
+        for name in config_files(root):
             path=root/name
             info=path.stat()
             result[str(path)]=[hashlib.sha256(path.read_bytes()).hexdigest(),info.st_mode,info.st_uid,info.st_gid]
@@ -62,12 +63,20 @@ def main():
     for identifier in current.values():
         assert run(['docker','inspect','--format','{{.HostConfig.RestartPolicy.Name}}',identifier])=='no'
     compose,_=commands(data)
-    check(compose,run,values)
+    deadline=time.monotonic()+20
+    while True:
+        try:
+            check(compose,run,values)
+            break
+        except (OSError,ValueError,RuntimeError,KeyError,TypeError):
+            if time.monotonic()>=deadline:raise
+            time.sleep(1)
+    print('BOOT '+run(['uptime','-s'])+' | READY '+str(round(timestamp('transparent-gateway.service','ActiveEnterTimestampMonotonic')/1000000,2))+'s after boot')
     print('HOST '+socket_hostname()+' | SYSTEMD enabled / active (running)')
     print('PASS reboot: boot ID changed; current boot has BOOT_LOCAL_READY')
     print('PASS ordering: network-online + Docker ready before application')
     print('PASS same 6 application + 2 lab containers; Docker auto-restart disabled')
-    print('PASS Redis data marker and protected config/secrets preserved')
+    print('PASS Redis marker and protected config/secrets/proxy CA preserved')
     print('PASS fresh pools and authenticated local relay echo after reboot')
     print('REBOOT_CHECK PASS — automatic systemd startup; client/DNS/public checks pending')
 

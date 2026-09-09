@@ -270,3 +270,22 @@ request correlation and forwarding guard counters. Addresses of public exits
 are hidden in the human-readable output. This is a lab route/readiness check,
 not a complete anonymity audit: the public endpoint observes headers after
 Cloudflare. Reboot and clean-clone reproducibility remain separate tests.
+
+### Full reboot evidence
+
+Before reboot, archive the earlier root-only reboot baseline and remove only its
+namespaced verification marker from Redis. On the gateway run
+`sudo python3 deploy/verify-boot.py --prepare` for the current service pin.
+It records all runtime files, including the optional proxy CA, container IDs,
+boot ID and a fresh Redis persistence marker. Reboot the test VM and do not start
+systemd units or Compose manually. Wait for automatic readiness, then on ARIS:
+
+```sh
+python3 deploy/verify-full-boot.py
+```
+
+The combined check verifies a new boot, dependency ordering, preserved container
+IDs/data/config/CA, current-boot readiness and fresh client DNS, local/public echo
+and forwarding guard. It prints boot time and systemd readiness time. Keep the
+baseline for screenshot verification; it contains protected state and must not
+be shown in the article or committed.
