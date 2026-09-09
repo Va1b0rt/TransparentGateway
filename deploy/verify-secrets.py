@@ -9,7 +9,7 @@ import socket
 import subprocess
 import sys
 
-from deploy import FILES, SAFE_ENV, validate, read_env
+from deploy import config_files, SAFE_ENV, validate, read_env
 from readiness import check
 
 ROOT = Path('/opt/transparent-gateway')
@@ -39,22 +39,25 @@ def main():
     host = json.loads(Path('/etc/transparent-gateway/host.json').read_text())
     values = validate(CONFIG, host)
     validate(ROOT, host)
-    for name in FILES:
+    for name in config_files(CONFIG):
         assert (CONFIG/name).read_bytes() == (ROOT/name).read_bytes()
     assert CONFIG.stat().st_mode & 0o777 == 0o700
     for name in ['secrets','provider-secrets']:
         assert (ROOT/name).stat().st_mode & 0o777 == 0o750
         assert (ROOT/name).stat().st_uid == 0 and (ROOT/name).stat().st_gid == 65532
     print('PASS permissions: canonical 0700; .env root:root 0600; secrets root:65532 0640', flush=True)
-    current = json.loads((CONFIG/'secrets/proxy-credentials.json').read_text())['lab-proxy']
-    known = [current['username'],current['password'],(CONFIG/'provider-secrets/api-token').read_text().strip()]
+    credentials = json.loads((CONFIG/'secrets/proxy-credentials.json').read_text())
+    current = credentials['lab-proxy']
+    known = [entry[field] for entry in credentials.values() for field in ('username','password')]
+    known.append((CONFIG/'provider-secrets/api-token').read_text().strip())
     previous = Path('/var/lib/transparent-gateway/previous-test-secrets.json')
     old = json.loads(previous.read_text()) if previous.exists() else None
     if old:
         known += [old['username'],old['password'],old['provider_token']]
     patterns = {v.encode() for v in known if v}
     patterns |= {base64.b64encode(v) for v in patterns}
-    patterns.add(base64.b64encode((current['username']+':'+current['password']).encode()))
+    for entry in credentials.values():
+        patterns.add(base64.b64encode((entry['username']+':'+entry['password']).encode()))
     if old:
         patterns.add(base64.b64encode((old['username']+':'+old['password']).encode()))
     def clean(data):
@@ -105,7 +108,7 @@ def main():
         if capture(redis+['TYPE',key]).strip()==b'string':
             clean(capture(redis+['GET',key]))
     print('PASS known test secrets absent: tracked files, cloud-init, journal, container logs/inspect, Redis strings', flush=True)
-    print('SECRETS_CHECK PASS — lab credentials; provider file verified, real provider API not exercised', flush=True)
+    print('SECRETS_CHECK PASS — all configured proxy credentials scanned; real provider API not exercised', flush=True)
 
 
 if __name__ == '__main__':
