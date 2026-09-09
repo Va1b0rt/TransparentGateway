@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import hashlib
 import time
+import ssl
 from pathlib import Path
 from typing import Callable
 
@@ -43,6 +44,18 @@ class CredentialStore:
         if not isinstance(username, str) or not isinstance(password, str):
             raise ValueError("proxy credential entry is invalid")
         return username, password
+
+    def tls_context(self, reference: str | None) -> ssl.SSLContext:
+        context = ssl.create_default_context()
+        if reference is not None:
+            self.get(reference)
+            item = self.values[reference]
+            ca_file = item.get('ca_file')
+            if ca_file:
+                if ca_file != '/run/secrets/upstream-ca.crt':
+                    raise ValueError('unapproved proxy CA path')
+                context.load_verify_locations(cafile=ca_file)
+        return context
 
     def _reload(self) -> None:
         try:

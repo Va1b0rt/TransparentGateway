@@ -2,6 +2,8 @@
 # isolates it from the separate lab Compose project's bridge.
 services:
   validator:
+    environment:
+      LAB_LOCAL_ECHO_ENABLED: "1"
     networks:
       - default
       - fixture

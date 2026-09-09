@@ -10,3 +10,5 @@ inventory/upstreams.jsonl.disabled-*
 secrets/*.json*
 !secrets/*.json.example
 provider-secrets/
+
+secrets/*.crt

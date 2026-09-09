@@ -31,6 +31,7 @@ async def probe(
             target,
             timeout,
             auth,
+            **({"proxy_context": credentials.tls_context(candidate.credential_ref)} if candidate.protocol == "https" else {}),
         )
         anonymity_level = classify_anonymity(observation, direct_identities)
         if anonymity_level is None:
@@ -78,6 +79,8 @@ async def cycle(client: Any) -> tuple[int, int] | None:
     if timeout <= 0:
         raise ValueError("PROXY_VALIDATION_TIMEOUT_SECONDS must be positive")
     target = CheckTarget.parse(os.getenv("ANONYMITY_CHECK_URL", ""))
+    lab_target = CheckTarget.parse("http://172.30.40.10:8000/") if os.getenv("LAB_LOCAL_ECHO_ENABLED") == "1" else None
+    lab_baseline = await direct_observation(lab_target, timeout) if lab_target else None
     baseline = await direct_observation(target, timeout)
     direct_identities = {baseline.peer}
     direct_identities.update(
@@ -92,10 +95,11 @@ async def cycle(client: Any) -> tuple[int, int] | None:
     with AsnResolver.from_environment() as asn_resolver:
         async def guarded(candidate: ProxyCandidate) -> dict[str, object] | None:
             async with semaphore:
+                local = lab_target is not None and candidate.host == "172.30.40.11" and candidate.port == 3128 and candidate.credential_ref == "lab-proxy"
                 return await probe(
                     candidate,
-                    target,
-                    direct_identities,
+                    lab_target if local else target,
+                    {lab_baseline.peer} if local else direct_identities,
                     timeout,
                     credentials,
                     asn_resolver,

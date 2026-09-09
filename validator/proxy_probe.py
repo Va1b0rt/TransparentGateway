@@ -305,13 +305,14 @@ async def proxy_observation(
     target: CheckTarget,
     timeout: float,
     auth: tuple[str, str] | None = None,
+    proxy_context: ssl.SSLContext | None = None,
 ) -> tuple[EchoObservation, int]:
     """Perform a real request through HTTP(S), SOCKS4, or SOCKS5."""
     loop = asyncio.get_running_loop()
     started = loop.time()
 
     async def exchange() -> EchoObservation:
-        proxy_tls = ssl.create_default_context() if candidate.protocol == "https" else None
+        proxy_tls = (proxy_context or ssl.create_default_context()) if candidate.protocol == "https" else None
         reader, writer = await asyncio.open_connection(
             candidate.host,
             candidate.port,

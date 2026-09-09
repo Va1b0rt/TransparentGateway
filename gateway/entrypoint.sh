@@ -11,6 +11,9 @@ if [ "$CLIENT_CIDR" = "0.0.0.0/0" ]; then
   exit 64
 fi
 
+# Keep this guard across service stops: only intercepted local sockets may serve clients.
+iptables -C FORWARD -s "$CLIENT_CIDR" -j DROP 2>/dev/null || iptables -I FORWARD 1 -s "$CLIENT_CIDR" -j DROP
+
 cleanup() {
   iptables -t nat -D PREROUTING -s "$CLIENT_CIDR" -p tcp -j TG_TCP 2>/dev/null || true
   iptables -t nat -D PREROUTING -s "$CLIENT_CIDR" -p udp --dport 53 -j TG_DNS_DOH 2>/dev/null || true

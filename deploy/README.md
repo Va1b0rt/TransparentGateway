@@ -236,3 +236,37 @@ fixture proxy is deliberately restricted to local echo and cannot serve public D
 internet destinations. This result is not public/production readiness. The gateway-side
 service also uses the stronger pipeline checks at startup; update its pinned settings
 with install-service.py after deployment as described above.
+
+### Public upstream and full client readiness in the isolated lab
+
+After verifying the encrypted handoff, run `deploy/lab/enable-public-upstream.py`
+as root on the lab gateway. It validates the three root-only handoff files, keeps
+the local fixture credential, adds the HTTPS proxy credential with a scoped CA,
+and creates a protected backup of the prior runtime. Real endpoint addresses and
+CA certificates live only in ignored runtime/secret files. The optional sixth
+transfer file is `secrets/upstream-ca.crt`; it is mounted read-only alongside the
+credential store. Only proxy TLS connections using that credential load this CA;
+public echo TLS still uses the system trust store.
+
+Deploy the pinned commit with `--lab-fixture`, then run `install-service.py` with
+the same commit. The lab override validates the explicitly matched local fixture
+against the local echo; the public proxy is validated against the configured
+HTTPS echo. Both must enter the active pool. Local and public targets exercise
+separate upstreams; failed CONNECTs fall back to another validated candidate.
+The persistent FORWARD drop rule for CLIENT_CIDR blocks unhandled client traffic,
+including non-DNS UDP, while TCP and DNS are intercepted into local sockets.
+
+From the operator host:
+
+```sh
+python3 deploy/verify-readiness.py --public \
+  --gateway tgadmin@192.168.88.114 --client tgadmin@192.168.88.115
+```
+
+`FULL_CLIENT_READINESS PASS` requires fresh pool lineage, local relay echo,
+a fresh UDP DNS response to the client, certificate-verified HTTPS to the public
+echo at a DNS-resolved address, both echo exits present in the active pool,
+request correlation and forwarding guard counters. Addresses of public exits
+are hidden in the human-readable output. This is a lab route/readiness check,
+not a complete anonymity audit: the public endpoint observes headers after
+Cloudflare. Reboot and clean-clone reproducibility remain separate tests.

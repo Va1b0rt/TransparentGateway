@@ -110,7 +110,7 @@ async def connect_upstream(candidate: dict[str, Any], target: tuple[str, int], c
         host, port_text = endpoint.rsplit(":", 1)
         host, port_value = host.strip("[]"), int(port_text)
     auth = credentials.get(candidate.get("credential_ref"))
-    ssl_context = ssl.create_default_context() if protocol == "https" else None
+    ssl_context = credentials.tls_context(candidate.get("credential_ref")) if protocol == "https" else None
     reader, writer = await asyncio.open_connection(host, int(port_value), ssl=ssl_context, server_hostname=host if ssl_context else None)
     if protocol in {"http", "https"}:
         token = ""
@@ -229,7 +229,7 @@ async def handle(client_reader: asyncio.StreamReader, client_writer: asyncio.Str
                     connect_upstream(candidate, target, credentials), 15
                 )
             except (asyncio.TimeoutError, OSError, ValueError) as error:
-                print(f"[egress-relay] {candidate.get('endpoint')} -> {target} failed: {type(error).__name__}: {error}", flush=True)
+                print(f"[egress-relay] upstream CONNECT failed: {type(error).__name__}", flush=True)
                 await pool.record_result(candidate, target[1], False)
                 continue
             await pool.record_result(candidate, target[1], True)

@@ -85,3 +85,16 @@ def test_unchanged_config_preserves_inode_and_mtime(tmp_path):
     link.symlink_to(target)
     with pytest.raises(ValueError,match='symlink'):
         deployment.atomic_write(link,b'changed',0o600)
+
+
+def test_https_ca_is_required_and_has_protected_permissions(runtime_config):
+    root,host=runtime_config
+    p=root/'secrets/proxy-credentials.json'
+    p.write_text('{"provider":{"username":"test","password":"synthetic","ca_file":"/run/secrets/upstream-ca.crt"}}')
+    with pytest.raises(FileNotFoundError):deployment.validate(root,host)
+    ca=root/'secrets/upstream-ca.crt'
+    ca.write_bytes(Path('/etc/ssl/certs/ca-certificates.crt').read_bytes())
+    ca.chmod(0o640);os.chown(ca,0,65532)
+    deployment.validate(root,host)
+    ca.chmod(0o644)
+    with pytest.raises(ValueError,match='permissions'):deployment.validate(root,host)

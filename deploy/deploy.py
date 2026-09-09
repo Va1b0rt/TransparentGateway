@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import ssl
 import subprocess
 import tempfile
 import time
@@ -22,6 +23,13 @@ SAFE_ENV = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
             'LANG': 'C.UTF-8', 'COMPOSE_PARALLEL_LIMIT': '1'}
 STATE = Path('/var/lib/transparent-gateway/deployment.json')
 FILES = ['.env', 'inventory/connectors.json', 'inventory/upstreams.jsonl', 'secrets/proxy-credentials.json', 'provider-secrets/api-token']
+
+
+OPTIONAL_CA = 'secrets/upstream-ca.crt'
+
+
+def config_files(root):
+    return FILES + ([OPTIONAL_CA] if (root/OPTIONAL_CA).exists() else [])
 
 
 def run(command, timeout=120):
@@ -50,7 +58,7 @@ def read_env(path):
 
 
 def validate(config, host):
-    for name in FILES:
+    for name in config_files(config):
         path = config/name
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
@@ -78,12 +86,17 @@ def validate(config, host):
     for address in values['DNS_DEFAULT_RESOLVER_IPS'].split(',')+[values['DNS_DOH_IP']]:
         ipaddress.IPv4Address(address.strip())
     echo = urlsplit(values['ANONYMITY_CHECK_URL'])
-    if echo.scheme != 'http' or not echo.hostname or echo.username or echo.password or echo.fragment:
-        raise ValueError('stage-3 local readiness requires an HTTP echo without URL credentials')
+    if echo.scheme not in ('http','https') or not echo.hostname or echo.username or echo.password or echo.fragment or echo.query:
+        raise ValueError('readiness requires HTTP(S) echo without credentials or query')
     credentials = json.loads((config/'secrets/proxy-credentials.json').read_text())
     if not isinstance(credentials, dict) or any(not isinstance(v, dict) or
             not isinstance(v.get('username'), str) or not isinstance(v.get('password'), str) for v in credentials.values()):
         raise ValueError('invalid proxy credential store')
+    for entry in credentials.values():
+        if entry.get('ca_file'):
+            if entry['ca_file'] != '/run/secrets/upstream-ca.crt':
+                raise ValueError('unapproved proxy CA path')
+            ssl.create_default_context(cafile=str(config/OPTIONAL_CA))
     connectors = json.loads((config/'inventory/connectors.json').read_text())
     allowed, active = connectors.get('allowed_connector_types'), connectors.get('active_connectors')
     if not isinstance(allowed, list) or not isinstance(active, list) or not active:
@@ -205,7 +218,7 @@ def deploy(args):
                 parent.chmod(mode)
             parent = parent.parent
     changed = 0
-    for name in FILES:
+    for name in config_files(config):
         path = target/name
         path.parent.mkdir(exist_ok=True)
         if name != '.env':
@@ -249,8 +262,8 @@ def deploy(args):
     atomic_write(STATE, (json.dumps(result,indent=2)+'\n').encode(), 0o600)
     print(f'CONTAINERS created_or_replaced={len(after-before)} unchanged={len(before & after)}', flush=True)
     print('POOL_COUNTS '+json.dumps(readiness['pool_counts'],sort_keys=True), flush=True)
-    print('PASS fresh snapshots and local echo through gateway relay', flush=True)
-    print(f"LOCAL_READY elapsed={result['elapsed_seconds']}s; client/DNS/public checks pending", flush=True)
+    print('PASS fresh snapshots and configured echo through gateway relay', flush=True)
+    print(f"HOST_READY elapsed={result['elapsed_seconds']}s; client/DNS/public checks pending", flush=True)
 
 
 def main():
