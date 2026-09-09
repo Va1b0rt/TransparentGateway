@@ -94,3 +94,41 @@ initial host state; it does not claim application readiness.
 References: [Proxmox Cloud-Init support](https://pve.proxmox.com/pve-docs/pve-admin-guide.html#qm_cloud_init),
 [qm command reference](https://pve.proxmox.com/pve-docs/qm.1.html),
 [pinned Debian image directory](https://cloud.debian.org/images/cloud/trixie/20260831-2587/).
+
+## Full lab recreate and repeated reboot
+
+`recreate-lab.py` is the operator orchestration for the article's exact lab topology.
+Run it from a clean committed checkout on ARIS as root. It checks template 9001,
+requires VM216 to be absent, saves only the six protected runtime files from
+VM214, and sends an immutable Git bundle to Proxmox. It gracefully stops VM214
+before creating VM216 (`tg-repro-05`, management `192.168.88.116`) because they
+share the isolated client gateway and lab addresses. VM215 remains the client.
+Existing lab VMs are preserved; VM204 is not a target of any operation.
+
+The clone's cloud-init installs packages and runs host bootstrap. The operator
+script then automatically delivers source and secrets separately over SSH,
+deploys the pinned commit, installs systemd, checks client DNS/TCP/local/public
+echo and secrets, reboots the clone and repeats the checks. No Redis data,
+container images, guest disks or SSH host keys are copied from VM214. The new
+SSH key is obtained through the authenticated Proxmox guest agent before strict
+SSH login. This is operator-driven automation; cloud-init itself contains no
+application secrets and does not fetch them from a public URL.
+
+```sh
+python3 deploy/proxmox/recreate-lab.py --evidence /root/tg-recreate-evidence
+python3 deploy/verify-recreate.py --evidence /root/tg-recreate-evidence
+```
+
+The evidence directory is created exclusively with mode 0700 and holds a
+protected runtime backup as well as logs. Do not commit or publish its contents.
+The screenshot verifier prints only safe summaries and fresh readiness results.
+A failed run stops, records its stage, and preserves the VM and evidence. It does
+not perform repairs or silently reuse an old clone. After correcting an actual
+failure, adapt the reviewed lab constants and use a new VMID and evidence path
+for a new clean attempt. Do not restart VM214 while VM216 owns the shared isolated
+addresses. The read-only screenshot verifier can be repeated without redeploying
+or rebooting anything.
+
+The application commit is pinned; Debian package repositories and some Docker
+base image tags are not frozen snapshots. Successful recreate proves the tested
+procedure and environment, not indefinite byte-for-byte reproducibility.
