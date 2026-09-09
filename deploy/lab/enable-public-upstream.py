@@ -34,7 +34,8 @@ def main():
                 atomic_write(staging/name,(config/name).read_bytes(),0o600 if name=='.env' else 0o640,0 if name=='.env' else 65532)
             values=read_env(staging/'.env')
             values.update(ANONYMITY_CHECK_URL='https://echo.devdays.net.ua/',POOL_SIZE='2',RESERVE_SIZE='4',
-                MAX_UNKNOWN_ASN_RATIO='0.5',LAB_LOCAL_ECHO_ENABLED='1',VALIDATION_INTERVAL_SECONDS='30')
+                MAX_UNKNOWN_ASN_RATIO='0.5',LAB_LOCAL_ECHO_ENABLED='1',VALIDATION_INTERVAL_SECONDS='30',
+                DNS_DEFAULT_RESOLVER_IPS='1.1.1.1,1.0.0.1,192.168.91.1')
             atomic_write(staging/'.env',''.join(f'{k}={v}\n' for k,v in values.items()).encode(),0o600)
             creds=json.loads((staging/'secrets/proxy-credentials.json').read_text())
             assert 'lab-proxy' in creds

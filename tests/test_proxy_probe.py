@@ -165,7 +165,7 @@ async def _http_connect_auth_scenario():
 
 def test_http_connect_uses_basic_authentication():
     request = asyncio.run(_http_connect_auth_scenario())
-    assert request.startswith(b"CONNECT echo.example HTTP/1.1\r\n")
+    assert request.startswith(b"CONNECT echo.example:443 HTTP/1.1\r\n")
     assert b"Proxy-Authorization: Basic dXNlcjpwYXNz\r\n" in request
 
 
@@ -272,3 +272,19 @@ def test_socks5_proxy_uses_username_password_authentication():
     observation, latency_ms = asyncio.run(_authenticated_socks5_scenario())
     assert observation.peer == "198.51.100.9"
     assert latency_ms >= 1
+
+
+def test_https_connect_includes_default_port_and_ipv6_brackets():
+    from proxy_probe import _http_proxy_tunnel
+    async def scenario():
+        for url,authority in [('https://echo.example/','echo.example:443'),
+                              ('https://[2001:db8::1]/','[2001:db8::1]:443')]:
+            class Writer:
+                data=b''
+                def write(self,data):self.data+=data
+                async def drain(self):pass
+            reader=asyncio.StreamReader();reader.feed_data(b'HTTP/1.1 200 OK\r\n\r\n')
+            writer=Writer()
+            await _http_proxy_tunnel(reader,writer,CheckTarget.parse(url),None)
+            assert writer.data.split(b'\r\n')[0]==('CONNECT '+authority+' HTTP/1.1').encode()
+    asyncio.run(scenario())

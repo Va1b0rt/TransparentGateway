@@ -184,7 +184,8 @@ async def _http_proxy_tunnel(
     target: CheckTarget,
     auth: tuple[str, str] | None,
 ) -> None:
-    authority = target.authority
+    host = f"[{target.host}]" if ":" in target.host else target.host
+    authority = f"{host}:{target.port}"
     writer.write(
         (
             f"CONNECT {authority} HTTP/1.1\r\n"
