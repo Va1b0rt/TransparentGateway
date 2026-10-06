@@ -166,6 +166,46 @@ This implementation is Linux- and IPv4-specific. Constants such as
 `IP_TRANSPARENT`, `IP_RECVORIGDSTADDR`, `IP_PKTINFO`, and `SO_MARK` use the Linux
 socket API.
 
+## First run
+
+Clone the repository on the Linux host that will route the client subnet. The
+interactive configurator asks for that subnet and one authorised proxy. A proxy
+password is read without echoing it and is written only to the ignored credential
+file.
+
+```sh
+git clone https://github.com/Va1b0rt/TransparentGateway.git
+cd TransparentGateway
+sudo ./tgctl configure
+```
+
+Validate the generated files before the privileged gateway container is started:
+
+```sh
+sudo ./tgctl check
+```
+
+The check validates file ownership and permissions, the canonical `host`/`port`
+inventory format, credential references, the client subnet, the echo URL, and the
+rendered Compose configuration. It does not change `iptables` or routing rules.
+
+Start the six services and wait until the supplied proxy reaches the active pool:
+
+```sh
+sudo ./tgctl up --timeout 300
+```
+
+Later, show a redacted service and pool summary without dumping proxy addresses or
+credentials:
+
+```sh
+sudo ./tgctl status
+```
+
+The public echo endpoint in the example is convenient for a first run. Deploy an
+instance of TransparentGatewayEcho that you control before continuous validation
+if proxy exit addresses must not be disclosed to a third party.
+
 ## Configuration
 
 Create the runtime files from the supplied examples:
