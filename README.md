@@ -179,6 +179,20 @@ cd TransparentGateway
 sudo python3 scripts/tgctl.py configure
 ```
 
+The prompts mean:
+
+| Prompt | What to enter |
+| --- | --- |
+| Client IPv4 subnet | The network behind this gateway, not its management network. In the example topology below: `192.168.91.0/24`. |
+| Proxy protocol | The protocol stated by the proxy operator: `http`, `https`, `socks4`, or `socks5`. This is not the protocol of the destination website. |
+| Proxy host or IP | The authorised upstream proxy address supplied by its operator. Do not enter the gateway or echo address. |
+| Proxy port | The port supplied together with that proxy address. |
+| Username and password | Answer yes only when the upstream proxy requires them, then enter the credentials supplied by its operator. |
+| Validation echo URL | Press Enter for the public first-run endpoint, or enter the URL of your own compatible echo service. |
+
+The proxy address and credentials do not come from this repository. They belong to
+the proxy service you administer or are authorised to use.
+
 Validate the generated files before the privileged gateway container is started:
 
 ```sh

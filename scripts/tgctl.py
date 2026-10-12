@@ -100,7 +100,7 @@ def configure(_args):
     if existing:
         raise UserError("runtime files already exist; remove them explicitly before reconfiguring")
 
-    client_cidr = prompt("Client IPv4 subnet", "192.168.91.0/24")
+    client_cidr = prompt("Client IPv4 subnet routed through this gateway", "192.168.91.0/24")
     try:
         network = ipaddress.IPv4Network(client_cidr, strict=True)
     except ValueError as error:
@@ -108,10 +108,10 @@ def configure(_args):
     if network.prefixlen == 0:
         raise UserError("CLIENT_CIDR cannot be 0.0.0.0/0")
 
-    protocol = prompt("Proxy protocol (http, https, socks4, socks5)", "http").lower()
+    protocol = prompt("Protocol specified by your proxy provider (http, https, socks4, socks5)", "http").lower()
     if protocol not in PROTOCOLS:
         raise UserError("unsupported proxy protocol")
-    host = prompt("Proxy host or IP")
+    host = prompt("Authorised upstream proxy host or IP")
     if not host or any(char.isspace() for char in host):
         raise UserError("proxy host is empty or invalid")
     try:
@@ -123,7 +123,7 @@ def configure(_args):
 
     credentials = {}
     candidate = {"host": host, "port": port, "protocol": protocol, "source": "quickstart"}
-    if yes_no("Does the proxy require authentication?"):
+    if yes_no("Does the proxy require a username and password?"):
         reference = "quickstart-proxy"
         username = prompt("Proxy username")
         password = getpass.getpass("Proxy password: ")
@@ -132,7 +132,7 @@ def configure(_args):
         candidate["credential_ref"] = reference
         credentials[reference] = {"username": username, "password": password}
 
-    echo_url = prompt("Validation echo URL", "https://echo.devdays.net.ua/")
+    echo_url = prompt("Validation echo URL (press Enter to use the public first-run service)", "https://echo.devdays.net.ua/")
     validate_echo_url(echo_url)
     values, order, comments = read_example_env()
     values.update({
