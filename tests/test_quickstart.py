@@ -9,7 +9,7 @@ import pytest
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-loader = importlib.machinery.SourceFileLoader("tg_quickstart", str(PROJECT / "tgctl"))
+loader = importlib.machinery.SourceFileLoader("tg_quickstart", str(PROJECT / "scripts/tgctl.py"))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 quickstart = importlib.util.module_from_spec(spec)
 loader.exec_module(quickstart)

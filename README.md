@@ -176,13 +176,13 @@ file.
 ```sh
 git clone https://github.com/Va1b0rt/TransparentGateway.git
 cd TransparentGateway
-sudo ./tgctl configure
+sudo python3 scripts/tgctl.py configure
 ```
 
 Validate the generated files before the privileged gateway container is started:
 
 ```sh
-sudo ./tgctl check
+sudo python3 scripts/tgctl.py check
 ```
 
 The check validates file ownership and permissions, the canonical `host`/`port`
@@ -192,14 +192,14 @@ rendered Compose configuration. It does not change `iptables` or routing rules.
 Start the six services and wait until the supplied proxy reaches the active pool:
 
 ```sh
-sudo ./tgctl up --timeout 300
+sudo python3 scripts/tgctl.py up --timeout 300
 ```
 
 Later, show a redacted service and pool summary without dumping proxy addresses or
 credentials:
 
 ```sh
-sudo ./tgctl status
+sudo python3 scripts/tgctl.py status
 ```
 
 The public echo endpoint in the example is convenient for a first run. Deploy an

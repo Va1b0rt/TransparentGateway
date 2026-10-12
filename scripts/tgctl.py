@@ -16,7 +16,7 @@ import time
 from urllib.parse import urlsplit
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = ROOT / ".env.example"
 RUNTIME_FILES = {
     ".env": 0o600,
@@ -159,7 +159,7 @@ def configure(_args):
     write_runtime(ROOT / "secrets/proxy-credentials.json", json.dumps(credentials, indent=2) + "\n", 0o640)
     (ROOT / "provider-secrets").mkdir(mode=0o750, exist_ok=True)
     print("CONFIGURE PASS")
-    print("Run: sudo ./tgctl check")
+    print("Run: sudo python3 scripts/tgctl.py check")
 
 
 def parse_env(path):
@@ -190,7 +190,7 @@ def validate_permissions():
     for name, mode in RUNTIME_FILES.items():
         path = ROOT / name
         if not path.exists():
-            raise UserError(f"missing runtime file: {name}; run sudo ./tgctl configure")
+            raise UserError(f"missing runtime file: {name}; run sudo python3 scripts/tgctl.py configure")
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode):
             raise UserError(f"runtime path is not a regular file: {name}")
