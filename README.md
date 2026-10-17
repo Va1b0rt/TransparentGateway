@@ -1,5 +1,7 @@
 # Transparent Gateway
 
+English | [Українська](README.uk.md)
+
 Transparent Gateway routes authorised client traffic through administrator-supplied
 HTTP, HTTPS, SOCKS4, or SOCKS5 upstream proxies. It provides transparent TCP
 proxying and two DNS paths while preserving the destination selected by the client.
