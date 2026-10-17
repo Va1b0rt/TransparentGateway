@@ -83,3 +83,13 @@ def test_gateway_address_dns_is_sent_to_doh_before_generic_tproxy():
     assert local_nat in entrypoint
     assert local_mangle in entrypoint
     assert entrypoint.index(local_mangle) < entrypoint.index(generic_tproxy)
+
+
+def test_systemd_unit_starts_existing_images_from_current_checkout(runtime):
+    unit = quickstart.systemd_unit(300)
+
+    assert f"WorkingDirectory={runtime}" in unit
+    assert f"ExecStart=/usr/bin/python3 {runtime}/scripts/tgctl.py up --timeout 300 --no-build --skip-service" in unit
+    assert "ExecStop=/usr/bin/docker compose stop --timeout 20" in unit
+    assert "WantedBy=multi-user.target" in unit
+    assert "ExecStart=/usr/bin/docker" not in unit

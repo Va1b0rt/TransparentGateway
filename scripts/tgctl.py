@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = ROOT / ".env.example"
+SYSTEMD_UNIT = Path("/etc/systemd/system/transparent-gateway.service")
 RUNTIME_FILES = {
     ".env": 0o600,
     "inventory/connectors.json": 0o640,
@@ -282,11 +283,70 @@ def check(_args):
 def up(args):
     require_root()
     load_and_validate()
-    command = ["docker", "compose", "up", "--build", "--detach"]
+    command = ["docker", "compose", "up", "--detach"]
+    command.append("--no-build" if args.no_build else "--build")
     result = subprocess.run(command, cwd=ROOT)
     if result.returncode:
         raise UserError("docker compose up failed")
     wait(argparse.Namespace(timeout=args.timeout))
+    if not args.skip_service:
+        install_service(args.timeout)
+
+
+def systemd_unit(timeout):
+    root = str(ROOT.resolve())
+    script = str((ROOT / "scripts/tgctl.py").resolve())
+    if any(char.isspace() or char == "%" for char in root + script):
+        raise UserError("repository path cannot contain whitespace or percent signs")
+    return f"""[Unit]
+Description=Transparent Gateway
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory={root}
+ExecStart=/usr/bin/python3 {script} up --timeout {timeout} --no-build --skip-service
+ExecStop=/usr/bin/docker compose stop --timeout 20
+TimeoutStartSec={timeout + 60}
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def write_systemd_unit(content):
+    temporary = SYSTEMD_UNIT.with_name(SYSTEMD_UNIT.name + ".tmp")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chown(temporary, 0, 0)
+        os.replace(temporary, SYSTEMD_UNIT)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def install_service(timeout):
+    write_systemd_unit(systemd_unit(timeout))
+    for command in (["systemd-analyze", "verify", str(SYSTEMD_UNIT)],
+                    ["systemctl", "daemon-reload"],
+                    ["systemctl", "enable", SYSTEMD_UNIT.name],
+                    ["systemctl", "restart", SYSTEMD_UNIT.name],
+                    ["systemctl", "is-active", SYSTEMD_UNIT.name],
+                    ["systemctl", "is-enabled", SYSTEMD_UNIT.name]):
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout + 90)
+        if result.returncode:
+            raise UserError(f"systemd command failed: {' '.join(command[:2])}")
+    print("SYSTEMD_SERVICE enabled=1 active=1")
 
 
 def active_snapshot():
@@ -340,6 +400,8 @@ def main():
     commands.add_parser("check", help="validate runtime files without changing network rules").set_defaults(handler=check)
     start = commands.add_parser("up", help="build, start, and wait for the first active proxy")
     start.add_argument("--timeout", type=int, default=300)
+    start.add_argument("--no-build", action="store_true", help=argparse.SUPPRESS)
+    start.add_argument("--skip-service", action="store_true", help=argparse.SUPPRESS)
     start.set_defaults(handler=up)
     waiting = commands.add_parser("wait", help="wait for a non-empty active proxy pool")
     waiting.add_argument("--timeout", type=int, default=300)
