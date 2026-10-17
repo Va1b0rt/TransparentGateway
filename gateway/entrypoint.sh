@@ -41,6 +41,10 @@ iptables -t nat -C PREROUTING -s "$CLIENT_CIDR" -p tcp -j TG_TCP 2>/dev/null || 
 iptables -t nat -A TG_TCP -p tcp -j REDIRECT --to-ports 12345
 iptables -t nat -C PREROUTING -s "$CLIENT_CIDR" -p udp --dport 53 -j TG_DNS_DOH 2>/dev/null || iptables -t nat -A PREROUTING -s "$CLIENT_CIDR" -p udp --dport 53 -j TG_DNS_DOH
 iptables -t mangle -C PREROUTING -s "$CLIENT_CIDR" -p udp --dport 53 -j TG_DNS_TPROXY 2>/dev/null || iptables -t mangle -A PREROUTING -s "$CLIENT_CIDR" -p udp --dport 53 -j TG_DNS_TPROXY
+# A client may use the gateway address itself as its DNS server. Keep that
+# traffic out of the generic transparent relay and answer it through DoH.
+iptables -t nat -A TG_DNS_DOH -p udp -m addrtype --dst-type LOCAL -j REDIRECT --to-ports 5053
+iptables -t mangle -A TG_DNS_TPROXY -m addrtype --dst-type LOCAL -j RETURN
 for resolver in $(printf '%s' "$DNS_DEFAULT_RESOLVER_IPS" | tr ',' ' '); do
   iptables -t nat -A TG_DNS_DOH -p udp -d "$resolver" -j REDIRECT --to-ports 5053
   iptables -t mangle -A TG_DNS_TPROXY -d "$resolver" -j RETURN

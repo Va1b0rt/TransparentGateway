@@ -72,3 +72,14 @@ def test_world_readable_credentials_are_rejected(runtime):
     (runtime / "secrets/proxy-credentials.json").chmod(0o644)
     with pytest.raises(quickstart.UserError, match="unsafe owner or permissions"):
         quickstart.load_and_validate()
+
+
+def test_gateway_address_dns_is_sent_to_doh_before_generic_tproxy():
+    entrypoint = (PROJECT / "gateway/entrypoint.sh").read_text()
+    local_nat = "iptables -t nat -A TG_DNS_DOH -p udp -m addrtype --dst-type LOCAL -j REDIRECT --to-ports 5053"
+    local_mangle = "iptables -t mangle -A TG_DNS_TPROXY -m addrtype --dst-type LOCAL -j RETURN"
+    generic_tproxy = "iptables -t mangle -A TG_DNS_TPROXY -p udp -j TPROXY"
+
+    assert local_nat in entrypoint
+    assert local_mangle in entrypoint
+    assert entrypoint.index(local_mangle) < entrypoint.index(generic_tproxy)
