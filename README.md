@@ -8,6 +8,11 @@ The project is intended for networks and proxy services you administer or are
 explicitly authorised to use. It does not collect public proxies or implement
 CAPTCHA, blocking, or rate-limit evasion.
 
+For a clean installation, start with [Requirements](#requirements), then follow
+[Network layout for the first run](#network-layout-for-the-first-run) and
+[First run](#first-run). The architecture and configuration sections below explain
+what those commands create.
+
 ## Related articles
 
 - [Прозоре проксіювання TCP: redsocks + HAProxy](https://devdays.net.ua/articles/prozore-proksiiuvannia-tcp-redsocks-haproxy/)
@@ -155,16 +160,56 @@ DNS requests. The real client request always receives a fresh tunnel.
 
 ## Requirements
 
-- Linux with IPv4 TPROXY, policy routing, `iptables` and connection marks;
-- Docker Engine and Docker Compose;
+- a Linux host with systemd, IPv4 TPROXY, policy routing, `iptables`, and
+  connection marks (the documented first run is tested on Debian 13);
+- Git and Python 3;
+- Docker Engine with the Docker Compose plugin;
 - root access on the gateway host;
-- a route from the client subnet to the gateway;
+- a dedicated client subnet routed through the gateway;
 - one or more authorised HTTP/HTTPS/SOCKS upstream proxies;
-- destination resolvers that support DNS over TCP for the explicit-resolver path.
+- destination resolvers that support DNS over TCP for the explicit-resolver path;
+- a separate Linux client with Python 3 for the end-to-end check.
 
 This implementation is Linux- and IPv4-specific. Constants such as
 `IP_TRANSPARENT`, `IP_RECVORIGDSTADDR`, `IP_PKTINFO`, and `SO_MARK` use the Linux
 socket API.
+
+Verify the required commands before cloning the repository:
+
+```sh
+git --version
+python3 --version
+docker --version
+docker compose version
+systemctl --version
+```
+
+The project does not install Docker or configure host network interfaces. Use the
+Docker packages appropriate for your distribution and make sure Docker is running:
+
+```sh
+sudo systemctl enable --now docker
+```
+
+## Network layout for the first run
+
+The gateway needs an address in the client subnet. The client must use that
+address as its only IPv4 default gateway. A separate management path is strongly
+recommended so a routing mistake does not lock you out of either machine.
+
+This guide uses one example consistently:
+
+```text
+Client network:         192.168.91.0/24
+Gateway client address: 192.168.91.1
+Test client address:    192.168.91.2
+Client default route:   192.168.91.1
+```
+
+`CLIENT_CIDR` is the whole client network (`192.168.91.0/24`), not the gateway's
+individual address. Assigning `192.168.91.1` to the gateway interface and setting
+the client's default route are host or hypervisor tasks; `tgctl.py` deliberately
+does not change them.
 
 ## First run
 
@@ -193,6 +238,19 @@ The prompts mean:
 The proxy address and credentials do not come from this repository. They belong to
 the proxy service you administer or are authorised to use.
 
+`configure` creates four runtime files with restricted ownership and permissions:
+
+```text
+.env
+inventory/connectors.json
+inventory/upstreams.jsonl
+secrets/proxy-credentials.json
+```
+
+They are ignored by Git. The command refuses to overwrite them; edit the existing
+files when changing a running installation instead of deleting them and entering
+all values again.
+
 Validate the generated files before the privileged gateway container is started:
 
 ```sh
@@ -209,27 +267,121 @@ Start the six services and wait until the supplied proxy reaches the active pool
 sudo python3 scripts/tgctl.py up --timeout 300
 ```
 
-Later, show a redacted service and pool summary without dumping proxy addresses or
+The first `up` builds the images, starts the containers, waits for a usable proxy,
+and installs `/etc/systemd/system/transparent-gateway.service`. The service uses
+this checkout on later boots, so do not move or delete the repository directory.
+The Compose services intentionally use `restart: "no"`; systemd owns their
+lifecycle.
+
+Use systemd after the first successful start:
+
+```sh
+sudo systemctl status transparent-gateway.service --no-pager
+sudo systemctl restart transparent-gateway.service
+sudo systemctl stop transparent-gateway.service
+sudo journalctl -u transparent-gateway.service --no-pager -n 100
+```
+
+Do not mix these commands with manual `docker compose down` calls. Systemd may
+still report the oneshot service as active after containers are removed behind its
+back.
+
+Show a redacted service and pool summary without dumping proxy addresses or
 credentials:
 
 ```sh
 sudo python3 scripts/tgctl.py status
 ```
 
-The public echo endpoint in the example is convenient for a first run. Deploy an
-instance of TransparentGatewayEcho that you control before continuous validation
-if proxy exit addresses must not be disclosed to a third party.
+`ACTIVE_POOL ready=1` proves that the supplied proxy passed validation. It does not
+yet prove that traffic from another machine crosses the gateway.
 
-## Configuration
+### Verify a real client request
 
-Create the runtime files from the supplied examples:
+Run the final check on a separate client whose only IPv4 default route points to
+the gateway. Copy `scripts/client-check.py` from any trusted machine that has this
+checkout and can reach the client's management address:
 
 ```sh
-cp .env.example .env
-cp inventory/connectors.json.example inventory/connectors.json
-cp inventory/upstreams.jsonl.example inventory/upstreams.jsonl
-cp secrets/proxy-credentials.json.example secrets/proxy-credentials.json
+scp scripts/client-check.py CLIENT_USER@CLIENT_MANAGEMENT_IP:/tmp/tg-client-check.py
+ssh CLIENT_USER@CLIENT_MANAGEMENT_IP
 ```
+
+The management address is used only to open the terminal. On the client, verify
+the route and run the check:
+
+```sh
+ip -4 route show default
+ip -4 route get 1.1.1.1
+python3 /tmp/tg-client-check.py --gateway 192.168.91.1
+```
+
+Both route commands must select `192.168.91.1`. A successful check looks like:
+
+```text
+CLIENT_ROUTE PASS gateway=192.168.91.1 dev=eth1
+CLIENT_DNS PASS addresses=2
+CLIENT_HTTPS PASS request_id=0123456789abcdef0123456789abcdef
+PUBLIC_EXIT id=0123456789ab
+```
+
+- `gateway` is the next hop and `dev` is the client's selected network interface;
+- `addresses` is the number of IPv4 addresses returned for the public echo host;
+- `request_id` is a new random marker echoed by the service, proving that the JSON
+  response belongs to this request;
+- `PUBLIC_EXIT id` is a short fingerprint of the source address observed by the
+  echo service.
+
+Run `sudo python3 scripts/tgctl.py status` on the gateway and compare
+`PUBLIC_EXIT id` with `active_exit_ids`. The same fingerprint on both machines
+means that the client request left through a proxy in the active pool. The
+fingerprint avoids printing the raw address during a routine check; it is not a
+security boundary and should not be published when the address itself is secret.
+
+The default `https://echo.devdays.net.ua/` endpoint is convenient for this first
+run, but its operator can see proxy exit addresses. For continuous validation,
+deploy an instance of
+[TransparentGatewayEcho](https://github.com/Va1b0rt/TransparentGatewayEcho) that
+you control. Provide its URL during `configure` and pass the same URL to
+`client-check.py --url`.
+
+### Verify restart recovery
+
+After the client check passes, an optional reboot confirms that systemd can return
+the gateway to service without a manual Compose command:
+
+```sh
+sudo systemctl reboot
+```
+
+Reconnect to the gateway, then run:
+
+```sh
+sudo systemctl status transparent-gateway.service --no-pager
+cd /path/to/TransparentGateway
+sudo python3 scripts/tgctl.py status
+```
+
+Repeat the client check after `ACTIVE_POOL` becomes ready.
+
+## Runtime configuration
+
+The first-run configurator is the supported way to create runtime files. Files
+ending in `.example` document the format only: they contain placeholder hosts and
+credentials and cannot be started unchanged. Do not copy them over files created
+by `configure`.
+
+After editing runtime files, validate and restart through the same control path:
+
+```sh
+sudo python3 scripts/tgctl.py check
+sudo systemctl restart transparent-gateway.service
+```
+
+The quickstart controller accepts one local `jsonl_inventory` connector, which may
+contain multiple authorised proxies. HTTP feed connectors and version-pinned
+operator deployments are documented in [`deploy/README.md`](deploy/README.md);
+do not enable them by bypassing `tgctl.py check` with an unreviewed Compose command.
 
 Important environment variables:
 
@@ -282,6 +434,10 @@ derived from the observed exit IP. It does not perform public-proxy discovery.
 
 ### Connector registry
 
+This section describes the extensible connector API, not the restricted
+single-connector quickstart accepted by `tgctl.py check`. Use the version-pinned
+deployment workflow when enabling an HTTP feed or another operator-managed source.
+
 The connector configuration contains only the deployment allow-list and active
 instances:
 
@@ -307,9 +463,11 @@ downstream workers remain unchanged.
 ### Upstream inventory
 
 The canonical candidate has `host`, `port`, `protocol`, `source`, optional
-`credential_ref`, and optional string metadata. The legacy `endpoint` form remains
-accepted at the input boundary; snapshots contain both forms for gateway
-compatibility. An unauthenticated SOCKS5 candidate can be as small as:
+`credential_ref`, and optional string metadata. The core normaliser still accepts
+the legacy `endpoint` form at selected connector boundaries, but the quickstart
+check rejects it so new installations use separate `host` and `port` fields.
+Snapshots contain both forms for gateway compatibility. An unauthenticated SOCKS5
+candidate can be as small as:
 
 ```json
 {"host":"proxy.example","port":1080,"protocol":"socks5"}
@@ -338,55 +496,30 @@ chown root:65532 secrets/proxy-credentials.json
 chmod 640 secrets/proxy-credentials.json
 ```
 
-## Network setup
+## Inspect a running gateway
 
-For an isolated test, use a dedicated VLAN or subnet and keep management traffic on
-a separate network. One possible layout is:
-
-```text
-Management network: 192.168.88.0/24
-Gateway management:  192.168.88.104
-
-Test VLAN 90:         192.168.90.0/24
-Gateway VLAN address: 192.168.90.1
-Test client:          192.168.90.10
-Client default route: 192.168.90.1
-```
-
-For this layout:
-
-```env
-CLIENT_CIDR=192.168.90.0/24
-DNS_DEFAULT_RESOLVER_IPS=1.1.1.1,1.0.0.1
-DNS_DOH_IP=1.1.1.1
-DNS_DOH_SERVER_NAME=cloudflare-dns.com
-```
-
-The switch or virtual bridge must carry the selected VLAN tag between the gateway
-and client. Do not move the management default route into the intercepted subnet.
-
-## Start
-
-Review `gateway/entrypoint.sh` before deployment because it modifies host
-`iptables` and policy-routing state. Then start the stack:
+`tgctl.py status` is the normal overview. For a failed start, inspect the service
+and recent container logs without dumping Redis snapshots or expanded Compose
+configuration:
 
 ```sh
-docker compose up --build -d
-docker compose ps
-docker compose logs -f validator gateway
+sudo systemctl status transparent-gateway.service --no-pager -l
+sudo journalctl -u transparent-gateway.service --no-pager -n 100
+sudo docker compose ps
+sudo docker compose logs --tail 100 validator gateway
 ```
 
-Inspect the current validated pool without displaying credentials:
+Redis snapshots contain proxy endpoints, observed exit addresses, and credential
+references. They do not contain passwords, but they still should not be pasted
+into public issues or screenshots. The container healthcheck confirms only that
+the local relay accepts TCP connections; use the separate client check for the
+complete route.
 
-```sh
-docker compose exec redis \
-  redis-cli GET transparent-gateway:validated:v1
-```
+Review `gateway/entrypoint.sh` before using the project on a shared host because
+the privileged gateway container modifies host `iptables` and policy-routing
+state.
 
-The container healthcheck confirms that the local egress relay accepts TCP
-connections. It does not replace end-to-end DNS tests.
-
-## Verify DNS routing
+## Advanced DNS verification
 
 Run ordinary and explicit-resolver queries on a client inside `CLIENT_CIDR`:
 
@@ -398,8 +531,8 @@ dig @8.8.8.8 example.com +short
 On the gateway, check which branches handled the packets:
 
 ```sh
-iptables -t nat -vnL TG_DNS_DOH
-iptables -t mangle -vnL TG_DNS_TPROXY
+sudo iptables -t nat -vnL TG_DNS_DOH
+sudo iptables -t mangle -vnL TG_DNS_TPROXY
 ```
 
 The first query increments `TG_DNS_DOH`; the second increments the TPROXY rule in
@@ -409,7 +542,7 @@ To prove that neither branch connects directly to its resolver, capture the prox
 endpoint and both possible direct destinations on the external interface:
 
 ```sh
-tcpdump -nn -ni eth0 \
+sudo tcpdump -nn -ni EXTERNAL_INTERFACE \
   '(host PROXY_IP and tcp port PROXY_PORT) or \
    (host 1.1.1.1 and tcp port 443) or \
    (host 8.8.8.8 and tcp port 53)'
@@ -444,9 +577,9 @@ table-100 route. After a forced termination or host failure, inspect host rules
 before restarting:
 
 ```sh
-iptables-save
-ip rule show
-ip route show table 100
+sudo iptables-save
+sudo ip rule show
+sudo ip route show table 100
 ```
 
 ## Tests
@@ -454,8 +587,8 @@ ip route show table 100
 Run the unit tests from the repository root:
 
 ```sh
-python -m pip install -r requirements-dev.txt
-python -m pytest tests
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest tests
 ```
 
 Unit tests cover connector normalisation, secret-reference authentication, CONNECT
