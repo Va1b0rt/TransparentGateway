@@ -19,6 +19,7 @@ CAPTCHA, блокування або обмеження частоти запи�
 
 - [Прозоре проксіювання TCP: redsocks + HAProxy](https://devdays.net.ua/articles/prozore-proksiiuvannia-tcp-redsocks-haproxy/)
 - [Витік DNS, або будуємо велосипед](https://devdays.net.ua/articles/vitik-dns-abo-buduiemo-velosiped/)
+- [Від GitHub до робочого Transparent Gateway](https://devdays.net.ua/articles/transparent-gateway-pislia-git-clone/) — перше встановлення на Debian, налаштування проксі, запуск через systemd і перевірка DNS та HTTPS із клієнта.
 
 ## Як це працює
 

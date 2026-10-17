@@ -19,6 +19,7 @@ what those commands create.
 
 - [Прозоре проксіювання TCP: redsocks + HAProxy](https://devdays.net.ua/articles/prozore-proksiiuvannia-tcp-redsocks-haproxy/)
 - [Витік DNS, або будуємо велосипед](https://devdays.net.ua/articles/vitik-dns-abo-buduiemo-velosiped/)
+- [Від GitHub до робочого Transparent Gateway](https://devdays.net.ua/articles/transparent-gateway-pislia-git-clone/) — first installation on Debian, proxy configuration, systemd startup, and a client DNS/HTTPS check (Ukrainian).
 
 ## How it works
 
