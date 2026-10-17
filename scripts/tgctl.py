@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Configure, validate, start, and inspect a first Transparent Gateway instance."""
+"""Configure, validate, start, stop, and inspect a Transparent Gateway instance."""
 
 import argparse
 import getpass
@@ -293,6 +293,43 @@ def up(args):
         install_service(args.timeout)
 
 
+def down(_args):
+    require_root()
+    if SYSTEMD_UNIT.exists():
+        result = subprocess.run(
+            ["systemctl", "stop", SYSTEMD_UNIT.name],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        if result.returncode:
+            raise UserError("cannot stop transparent-gateway.service")
+    else:
+        result = subprocess.run(
+            ["docker", "compose", "stop", "--timeout", "20"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode:
+            raise UserError("docker compose stop failed")
+
+    result = subprocess.run(
+        ["docker", "compose", "ps", "--status", "running", "--quiet"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode:
+        raise UserError("cannot verify that services stopped")
+    if result.stdout.strip():
+        raise UserError("one or more services are still running")
+    print("DOWN stopped=1")
+
+
 def systemd_unit(timeout):
     root = str(ROOT.resolve())
     script = str((ROOT / "scripts/tgctl.py").resolve())
@@ -403,6 +440,7 @@ def main():
     start.add_argument("--no-build", action="store_true", help=argparse.SUPPRESS)
     start.add_argument("--skip-service", action="store_true", help=argparse.SUPPRESS)
     start.set_defaults(handler=up)
+    commands.add_parser("down", help="stop services and remove interception rules").set_defaults(handler=down)
     waiting = commands.add_parser("wait", help="wait for a non-empty active proxy pool")
     waiting.add_argument("--timeout", type=int, default=300)
     waiting.set_defaults(handler=wait)

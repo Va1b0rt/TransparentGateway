@@ -93,3 +93,43 @@ def test_systemd_unit_starts_existing_images_from_current_checkout(runtime):
     assert "ExecStop=/usr/bin/docker compose stop --timeout 20" in unit
     assert "WantedBy=multi-user.target" in unit
     assert "ExecStart=/usr/bin/docker" not in unit
+
+
+def test_down_stops_installed_systemd_service_and_verifies_containers(runtime, monkeypatch, capsys):
+    unit = runtime / "transparent-gateway.service"
+    unit.write_text("test")
+    monkeypatch.setattr(quickstart, "SYSTEMD_UNIT", unit)
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(quickstart.subprocess, "run", fake_run)
+
+    quickstart.down(None)
+
+    assert commands == [
+        ["systemctl", "stop", "transparent-gateway.service"],
+        ["docker", "compose", "ps", "--status", "running", "--quiet"],
+    ]
+    assert capsys.readouterr().out == "DOWN stopped=1\n"
+
+
+def test_down_stops_compose_after_incomplete_first_start(runtime, monkeypatch):
+    unit = runtime / "missing-transparent-gateway.service"
+    monkeypatch.setattr(quickstart, "SYSTEMD_UNIT", unit)
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(quickstart.subprocess, "run", fake_run)
+
+    quickstart.down(None)
+
+    assert commands == [
+        ["docker", "compose", "stop", "--timeout", "20"],
+        ["docker", "compose", "ps", "--status", "running", "--quiet"],
+    ]

@@ -282,12 +282,15 @@ sudo python3 scripts/tgctl.py up --timeout 300
 ```sh
 sudo systemctl status transparent-gateway.service --no-pager
 sudo systemctl restart transparent-gateway.service
-sudo systemctl stop transparent-gateway.service
+sudo python3 scripts/tgctl.py down
 sudo journalctl -u transparent-gateway.service --no-pager -n 100
 ```
 
-Не змішуйте ці команди з ручним `docker compose down`. Якщо видалити контейнери
-поза systemd, служба типу oneshot усе одно може показувати стан `active`.
+`tgctl.py down` зупиняє службу systemd і чекає на зупинку її контейнерів. Якщо
+перший `up` завершився помилкою до встановлення служби, команда напряму зупинить
+частково запущений Compose-проєкт. Не використовуйте `docker compose down`: після
+видалення контейнерів поза systemd служба типу oneshot усе одно може показувати
+стан `active`.
 
 Перегляньте стан сервісів і пулу без виведення адрес проксі та паролів:
 

@@ -280,13 +280,15 @@ Use systemd after the first successful start:
 ```sh
 sudo systemctl status transparent-gateway.service --no-pager
 sudo systemctl restart transparent-gateway.service
-sudo systemctl stop transparent-gateway.service
+sudo python3 scripts/tgctl.py down
 sudo journalctl -u transparent-gateway.service --no-pager -n 100
 ```
 
-Do not mix these commands with manual `docker compose down` calls. Systemd may
-still report the oneshot service as active after containers are removed behind its
-back.
+`tgctl.py down` stops the systemd service and waits until its containers have
+stopped. If the first `up` failed before installing the service, the command stops
+the partially started Compose project directly. Do not use `docker compose down`:
+systemd may still report the oneshot service as active after its containers are
+removed behind its back.
 
 Show a redacted service and pool summary without dumping proxy addresses or
 credentials:
