@@ -11,3 +11,5 @@ COPY gateway/entrypoint.sh /app/entrypoint.sh
 COPY common/ /app/common/
 RUN chmod 0755 /app/entrypoint.sh
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
+# Deliberately broken test release: exercise automatic rollback, never merge.
+ENTRYPOINT ["/bin/sh", "-c", "echo 'rollback test: deliberate gateway startup failure' >&2; exit 42"]
