@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Configure, validate, start, stop, and inspect a Transparent Gateway instance."""
+"""Configure, run, update, and inspect a Transparent Gateway instance."""
 
 import argparse
 import getpass
@@ -26,6 +26,16 @@ RUNTIME_FILES = {
     "secrets/proxy-credentials.json": 0o640,
 }
 PROTOCOLS = {"http", "https", "socks4", "socks5"}
+UPDATE_API_VERSION = 1
+
+
+def compose_command(*arguments):
+    command = ["docker", "compose"]
+    images = ROOT / "runtime/update/images.json"
+    if images.exists():
+        project = json.loads(images.read_text())["name"]
+        command += ["--project-name", project, "-f", str(ROOT / "docker-compose.yml"), "-f", str(images)]
+    return command + list(arguments)
 
 
 class UserError(Exception):
@@ -33,6 +43,8 @@ class UserError(Exception):
 
 
 def run(command, *, timeout=120, input_text=None):
+    if list(command[:2]) == ["docker", "compose"]:
+        command = compose_command(*command[2:])
     return subprocess.run(
         [str(item) for item in command],
         cwd=ROOT,
@@ -283,8 +295,8 @@ def check(_args):
 def up(args):
     require_root()
     load_and_validate()
-    command = ["docker", "compose", "up", "--detach"]
-    command.append("--no-build" if args.no_build else "--build")
+    command = compose_command("up", "--detach")
+    command.append("--no-build" if args.no_build or (ROOT / "runtime/update/images.json").exists() else "--build")
     result = subprocess.run(command, cwd=ROOT)
     if result.returncode:
         raise UserError("docker compose up failed")
@@ -293,9 +305,9 @@ def up(args):
         install_service(args.timeout)
 
 
-def down(_args):
+def down(args):
     require_root()
-    if SYSTEMD_UNIT.exists():
+    if SYSTEMD_UNIT.exists() and not getattr(args, "skip_service", False):
         result = subprocess.run(
             ["systemctl", "stop", SYSTEMD_UNIT.name],
             cwd=ROOT,
@@ -307,7 +319,7 @@ def down(_args):
             raise UserError("cannot stop transparent-gateway.service")
     else:
         result = subprocess.run(
-            ["docker", "compose", "stop", "--timeout", "20"],
+            compose_command("stop", "--timeout", "20"),
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -317,7 +329,7 @@ def down(_args):
             raise UserError("docker compose stop failed")
 
     result = subprocess.run(
-        ["docker", "compose", "ps", "--status", "running", "--quiet"],
+        compose_command("ps", "--status", "running", "--quiet"),
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -346,7 +358,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory={root}
 ExecStart=/usr/bin/python3 {script} up --timeout {timeout} --no-build --skip-service
-ExecStop=/usr/bin/docker compose stop --timeout 20
+ExecStop=/usr/bin/python3 {script} down --skip-service
 TimeoutStartSec={timeout + 60}
 TimeoutStopSec=60
 
@@ -372,12 +384,19 @@ def write_systemd_unit(content):
             pass
 
 
-def install_service(timeout):
+def prepare_service(timeout):
     write_systemd_unit(systemd_unit(timeout))
     for command in (["systemd-analyze", "verify", str(SYSTEMD_UNIT)],
                     ["systemctl", "daemon-reload"],
-                    ["systemctl", "enable", SYSTEMD_UNIT.name],
-                    ["systemctl", "restart", SYSTEMD_UNIT.name],
+                    ["systemctl", "enable", SYSTEMD_UNIT.name]):
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout + 90)
+        if result.returncode:
+            raise UserError(f"systemd command failed: {' '.join(command[:2])}")
+
+
+def install_service(timeout):
+    prepare_service(timeout)
+    for command in (["systemctl", "restart", SYSTEMD_UNIT.name],
                     ["systemctl", "is-active", SYSTEMD_UNIT.name],
                     ["systemctl", "is-enabled", SYSTEMD_UNIT.name]):
         result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout + 90)
@@ -414,7 +433,7 @@ def wait(args):
 
 def status(_args):
     require_root()
-    result = subprocess.run(["docker", "compose", "ps"], cwd=ROOT)
+    result = subprocess.run(compose_command("ps"), cwd=ROOT)
     if result.returncode:
         raise UserError("cannot read service status")
     snapshot = active_snapshot()
@@ -430,6 +449,40 @@ def status(_args):
         print("ACTIVE_POOL ready=0")
 
 
+def ready(args):
+    """Use the deployment gate without assuming a particular lab topology."""
+    require_root()
+    values, _, _ = load_and_validate()
+    sys.path.insert(0, str(ROOT / "deploy"))
+    from readiness import check as check_ready
+
+    def output(command):
+        result = run(command, timeout=30)
+        if result.returncode:
+            raise RuntimeError("cannot query services or Redis")
+        return result.stdout
+
+    deadline = time.monotonic() + args.timeout
+    reason = "readiness timeout"
+    while time.monotonic() < deadline:
+        try:
+            result = check_ready(["docker", "compose"], output, values,
+                                 since=getattr(args, "since", None))
+            print("READINESS PASS services=6 fresh_pools=1 relay_echo=1")
+            return result
+        except (RuntimeError, ValueError, KeyError, TypeError, OSError,
+                subprocess.TimeoutExpired) as error:
+            reason = str(error)
+            time.sleep(min(3, max(0, deadline - time.monotonic())))
+    raise UserError("readiness failed: " + reason)
+
+
+def update(args):
+    require_root()
+    from tg_update import update as perform_update
+    perform_update(args, sys.modules[__name__])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -440,11 +493,22 @@ def main():
     start.add_argument("--no-build", action="store_true", help=argparse.SUPPRESS)
     start.add_argument("--skip-service", action="store_true", help=argparse.SUPPRESS)
     start.set_defaults(handler=up)
-    commands.add_parser("down", help="stop services and remove interception rules").set_defaults(handler=down)
+    stopping = commands.add_parser("down", help="stop services and remove interception rules")
+    stopping.add_argument("--skip-service", action="store_true", help=argparse.SUPPRESS)
+    stopping.set_defaults(handler=down)
     waiting = commands.add_parser("wait", help="wait for a non-empty active proxy pool")
     waiting.add_argument("--timeout", type=int, default=300)
     waiting.set_defaults(handler=wait)
     commands.add_parser("status", help="show services and a redacted active-pool summary").set_defaults(handler=status)
+    readiness = commands.add_parser("ready", help="check healthy services, fresh pools, and a real relay request")
+    readiness.add_argument("--timeout", type=int, default=300)
+    readiness.add_argument("--since", type=float, help=argparse.SUPPRESS)
+    readiness.set_defaults(handler=ready)
+    updating = commands.add_parser("update", help="install an origin revision; automatically restore the previous version on failure")
+    updating.add_argument("revision", nargs="?", default="main", help="branch, tag, or commit from origin (default: main)")
+    updating.add_argument("--timeout", type=int, default=300, help="readiness timeout, separately for update and recovery")
+    updating.add_argument("--recover", action="store_true", help="recover an interrupted update before trying again")
+    updating.set_defaults(handler=update)
     args = parser.parse_args()
     try:
         args.handler(args)

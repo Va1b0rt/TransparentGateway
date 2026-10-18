@@ -301,6 +301,57 @@ sudo python3 scripts/tgctl.py status
 `ACTIVE_POOL ready=1` proves that the supplied proxy passed validation. It does not
 yet prove that traffic from another machine crosses the gateway.
 
+### Update an installed gateway
+
+From the existing checkout, select a branch, tag, or commit available on `origin`:
+
+```sh
+sudo python3 scripts/tgctl.py update main --timeout 300
+```
+
+The updater checks for changes to tracked files, validates the candidate against
+your existing configuration in a temporary worktree, and builds images while
+the current containers keep running. It then replaces the containers, retaining
+the Compose project and named volumes. `.env`, inventory, and credential files
+are not rewritten. Changed tracked files stop the update and are listed by name.
+
+Success requires six running/healthy services, fresh pool snapshots with a
+successful validator cycle after replacement, and a real echo request through
+the relay matching an active exit. `--timeout` is the readiness budget for each
+attempt; recovery gets its own budget. Fetch/build have separate time limits.
+Connections may be interrupted during replacement. This host check does not
+replace the client route/DNS test below.
+
+If replacement or readiness fails, the command restores the previous commit and
+retained images, checks readiness again, and exits unsuccessfully even when
+recovery succeeds. `ROLLBACK PASS` means the previous version works again, not
+that the update succeeded. A failed recovery is reported separately. After an
+interrupted update, use the preserved journal to retry recovery:
+
+```sh
+sudo python3 scripts/tgctl.py update --recover --timeout 300
+```
+
+Recovery after a killed process or host interruption is explicit. The checkout
+stays at the installed commit (detached HEAD); local branches are not moved.
+Later updates fetch the selected revision from `origin`. On older installations,
+first obtain the release containing this command with Git.
+
+Keep `runtime/update/` (private and ignored by Git). Its `images.json` pins images
+for `tgctl.py` and systemd on later boots; `transaction.json` supports recovery.
+Use `tgctl.py` or systemd rather than direct Compose commands, which omit these
+image pins. Do not delete retained image tags during an update or recovery.
+
+This updater requires the existing six services and installed systemd unit. It
+refuses changes to Redis configuration or volume definitions. It does not undo
+data changes inside volumes: stored-format migrations need a separate procedure.
+
+Run the host readiness gate independently with:
+
+```sh
+sudo python3 scripts/tgctl.py ready --timeout 300
+```
+
 ### Verify a real client request
 
 Run the final check on a separate client whose only IPv4 default route points to

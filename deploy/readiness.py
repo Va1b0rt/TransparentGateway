@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 SERVICES = {'redis', 'fetcher', 'validator', 'ranker', 'asn-updater', 'gateway'}
 
 
-def check(compose, run, values):
+def check(compose, run, values, since=None):
     # Query only status/IDs: never print docker inspect environment values.
     rows = [json.loads(line) for line in run(compose+['ps', '--all', '--format', 'json']).splitlines() if line]
     if len(rows) == 1 and isinstance(rows[0], list):
@@ -35,6 +35,10 @@ def check(compose, run, values):
         age = time.time()-data['generated_at']
         if not -5 <= age <= limits[kind]:
             raise RuntimeError(kind+' snapshot stale')
+        if since is not None and data['generated_at'] < since:
+            raise RuntimeError(kind+' snapshot predates replacement')
+        if since is not None and kind != 'raw' and data.get('validator_cycle', {}).get('completed_at', 0) < since:
+            raise RuntimeError(kind+' validator cycle predates replacement')
         ages[kind], counts[kind], snapshots[kind] = round(age), len(data['entries']), data
     last_success = json.loads(run(compose+['exec','-T','redis','redis-cli','--raw','GET','validator:last_success:v1']) or 'null')
     pipeline = assess(snapshots,last_success,time.time(),limits)

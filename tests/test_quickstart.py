@@ -90,7 +90,7 @@ def test_systemd_unit_starts_existing_images_from_current_checkout(runtime):
 
     assert f"WorkingDirectory={runtime}" in unit
     assert f"ExecStart=/usr/bin/python3 {runtime}/scripts/tgctl.py up --timeout 300 --no-build --skip-service" in unit
-    assert "ExecStop=/usr/bin/docker compose stop --timeout 20" in unit
+    assert f"ExecStop=/usr/bin/python3 {runtime}/scripts/tgctl.py down --skip-service" in unit
     assert "WantedBy=multi-user.target" in unit
     assert "ExecStart=/usr/bin/docker" not in unit
 
@@ -133,3 +133,39 @@ def test_down_stops_compose_after_incomplete_first_start(runtime, monkeypatch):
         ["docker", "compose", "stop", "--timeout", "20"],
         ["docker", "compose", "ps", "--status", "running", "--quiet"],
     ]
+
+
+def test_systemd_stop_uses_pinned_project_without_recursing(runtime, monkeypatch):
+    import argparse
+    unit = runtime / "transparent-gateway.service"
+    unit.touch()
+    monkeypatch.setattr(quickstart, "SYSTEMD_UNIT", unit)
+    state = runtime / "runtime/update"
+    state.mkdir(parents=True)
+    pins = state / "images.json"
+    pins.write_text(json.dumps({"name": "original-project", "services": {}}))
+    commands = []
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(quickstart.subprocess, "run", fake_run)
+    quickstart.down(argparse.Namespace(skip_service=True))
+    assert not any(command[0] == "systemctl" for command in commands)
+    assert all(command[:4] == ["docker", "compose", "--project-name", "original-project"] for command in commands)
+
+
+def test_start_after_update_does_not_rebuild_retained_images(runtime, monkeypatch):
+    import argparse
+    state = runtime / "runtime/update"
+    state.mkdir(parents=True)
+    (state / "images.json").write_text(json.dumps({"name": "original-project", "services": {}}))
+    commands = []
+    monkeypatch.setattr(quickstart, "load_and_validate", lambda: None)
+    monkeypatch.setattr(quickstart, "wait", lambda args: None)
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(quickstart.subprocess, "run", fake_run)
+    quickstart.up(argparse.Namespace(no_build=False, timeout=30, skip_service=True))
+    assert "--no-build" in commands[0]
+    assert "--build" not in commands[0]
