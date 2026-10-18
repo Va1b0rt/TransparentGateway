@@ -233,6 +233,7 @@ def update(args, ctl):
         print("UPDATE preparing=1", flush=True)
         git(root, "fetch", "--no-tags", "origin", args.revision)
         target = git(root, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+        print(f"UPDATE from={previous[:12]} to={target[:12]}", flush=True)
         if target == previous:
             print("UPDATE unchanged=1 commit=" + target, flush=True)
             return
@@ -241,6 +242,7 @@ def update(args, ctl):
         # Put temporary credentials under the private runtime directory.
         stage = Path(tempfile.mkdtemp(prefix="candidate-", dir=directory))
         stage.rmdir()
+        print("UPDATE phase=prepare_images current_gateway_running=1", flush=True)
         pins = candidate(root, stage, project, target, images, ctl.RUNTIME_FILES)
         clean_checkout(root)
         if runtime_fingerprint(root, ctl.RUNTIME_FILES) != baseline:
@@ -261,6 +263,7 @@ def update(args, ctl):
         switched = True
         # ExecStop must use the pinned project too, including after a reboot.
         ctl.prepare_service(args.timeout)
+        print("UPDATE phase=replace_containers", flush=True)
         service(root, "stop", args.timeout)
         git(root, "checkout", "--detach", target)
         atomic_json(directory / "images.json", pins)
@@ -268,6 +271,7 @@ def update(args, ctl):
         execute(compose(root, "up", "--detach", "--no-build", "--pull", "never"), root,
                 timeout=args.timeout + 90, visible=True)
         service(root, "start", args.timeout)
+        print("UPDATE phase=check_readiness", flush=True)
         health(root, args.timeout, since)
         _, _, after_volumes = current_installation(root)
         if after_volumes != volumes or runtime_fingerprint(root, ctl.RUNTIME_FILES) != baseline:

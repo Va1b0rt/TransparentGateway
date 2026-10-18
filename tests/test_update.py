@@ -73,7 +73,7 @@ def transaction(tmp_path, monkeypatch):
     return ctl, args, state, events
 
 
-def test_success_pins_images_and_preserves_runtime(transaction):
+def test_success_pins_images_and_preserves_runtime(transaction, capsys):
     ctl, args, state, events = transaction
     before = (ctl.ROOT / ".env").read_bytes()
     updater.update(args, ctl)
@@ -84,6 +84,10 @@ def test_success_pins_images_and_preserves_runtime(transaction):
     assert events.index(("candidate", "b" * 40)) < events.index(("service", "stop"))
     assert json.loads((ctl.ROOT / "runtime/update/images.json").read_text())["name"] == "existing-project"
     assert any(kind == "health" and value is not None for kind, value in events)
+    output = capsys.readouterr().out
+    assert "UPDATE from=aaaaaaaaaaaa to=bbbbbbbbbbbb" in output
+    assert output.index("phase=prepare_images") < output.index("phase=replace_containers")
+    assert output.index("phase=replace_containers") < output.index("phase=check_readiness")
 
 
 def test_dirty_code_stops_before_fetch_or_containers(transaction):
