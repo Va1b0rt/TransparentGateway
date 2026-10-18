@@ -211,6 +211,48 @@ def test_named_volume_reassignment_is_detected():
     assert updater.volume_layout(before) != updater.volume_layout(after)
 
 
+def test_classic_docker_container_image_is_directly_addressable(tmp_path, monkeypatch):
+    row = {"Image": "sha256:classic", "Config": {"Image": "old-tag", "Labels": {"com.docker.compose.service": "gateway"}}}
+    monkeypatch.setattr(updater, "execute", lambda *a, **k: json.dumps([{"Id": "sha256:classic"}]))
+    assert updater.container_image(tmp_path, row) == "sha256:classic"
+
+
+@pytest.mark.parametrize("tag_moved", [False, True])
+def test_containerd_resolves_index_with_exact_running_manifest(tmp_path, monkeypatch, tag_moved):
+    row = {"Image": "sha256:config", "Config": {"Image": "gateway:latest", "Labels": {"com.docker.compose.service": "gateway"}},
+           "ImageManifestDescriptor": {"digest": "sha256:running-manifest", "platform": {"os": "linux", "architecture": "amd64"}}}
+    commands = []
+    def execute(command, root, **kwargs):
+        commands.append(command)
+        if "ls" in command:
+            return "sha256:original-index\n"
+        reference = command[-1]
+        if reference == "sha256:config":
+            raise updater.UpdateFailure("No such image")
+        image_id = "sha256:different-index" if tag_moved and reference in {"gateway:latest", "sha256:different-index"} else "sha256:original-index"
+        if "--platform" in command:
+            digest = "sha256:other-manifest" if image_id == "sha256:different-index" else "sha256:running-manifest"
+            return json.dumps([{"Id": digest, "Descriptor": {"digest": digest}}])
+        return json.dumps([{"Id": image_id}])
+    monkeypatch.setattr(updater, "execute", execute)
+    assert updater.container_image(tmp_path, row) == "sha256:original-index"
+    assert any("--platform" in command for command in commands)
+
+
+def test_containerd_refuses_a_tag_for_a_different_running_image(tmp_path, monkeypatch):
+    row = {"Image": "sha256:config", "Config": {"Image": "gateway:latest", "Labels": {"com.docker.compose.service": "gateway"}},
+           "ImageManifestDescriptor": {"digest": "sha256:running-manifest", "platform": {"os": "linux", "architecture": "amd64"}}}
+    def execute(command, root, **kwargs):
+        if "ls" in command:
+            return ""
+        if command[-1] == "sha256:config":
+            raise updater.UpdateFailure("No such image")
+        return json.dumps([{"Id": "sha256:wrong", "Descriptor": {"digest": "sha256:wrong"}}])
+    monkeypatch.setattr(updater, "execute", execute)
+    with pytest.raises(updater.UpdateFailure, match="no matching local image"):
+        updater.container_image(tmp_path, row)
+
+
 @pytest.mark.parametrize("old_cycle", [False, True])
 def test_old_snapshot_cannot_pass_post_update_readiness(monkeypatch, old_cycle):
     sys_path = str(PROJECT / "deploy")

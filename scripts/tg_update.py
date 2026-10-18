@@ -76,6 +76,60 @@ def compose(root, *arguments):
     return command + list(arguments)
 
 
+def container_image(root, row):
+    """Resolve an addressable image, including Docker's containerd image store.
+
+    Container.Image can be a config digest, while image inspect/tag addresses the
+    containing OCI index. Verify the immutable index's platform manifest against
+    the running container before retaining it; a moved tag alone is not evidence.
+    """
+    service_name = row["Config"]["Labels"]["com.docker.compose.service"]
+    descriptor = row.get("ImageManifestDescriptor") or {}
+    expected = descriptor.get("digest")
+    platform_data = descriptor.get("platform") or {}
+    platform = "/".join(platform_data.get(key, "") for key in ("os", "architecture"))
+    if platform_data.get("variant"):
+        platform += "/" + platform_data["variant"]
+
+    def inspect(reference, selected_platform=None):
+        command = ["docker", "image", "inspect"]
+        if selected_platform:
+            command += ["--platform", selected_platform]
+        return json.loads(execute(command + [reference], root))[0]
+
+    try:
+        image = inspect(row["Image"])
+        return image["Id"]
+    except UpdateFailure:
+        pass
+
+    if expected and all(platform_data.get(key) for key in ("os", "architecture")):
+        checked = set()
+
+        def matching(reference):
+            if not reference or reference in checked:
+                return None
+            checked.add(reference)
+            try:
+                image_id = inspect(reference)["Id"]
+                selected = inspect(image_id, platform)
+                digest = (selected.get("Descriptor") or {}).get("digest", selected["Id"])
+                return image_id if digest == expected else None
+            except UpdateFailure:
+                return None
+
+        image_id = matching(row["Config"].get("Image"))
+        if image_id:
+            return image_id
+        # A rebuilt tag can point elsewhere; look for the original local index.
+        for reference in execute(["docker", "image", "ls", "--all", "--quiet", "--no-trunc"], root).split():
+            image_id = matching(reference)
+            if image_id:
+                return image_id
+    raise UpdateFailure("cannot retain the running image for " + service_name
+                        + "; no matching local image found; containers have not been replaced")
+
+
 def current_installation(root):
     config = json.loads(execute(compose(root, "config", "--format", "json"), root))
     identifiers = execute(compose(root, "ps", "--all", "--quiet"), root).split()
@@ -91,7 +145,7 @@ def current_installation(root):
         service = labels["com.docker.compose.service"]
         if service in services or not row["State"]["Running"]:
             raise UpdateFailure("expected one running container per service: " + service)
-        services[service] = row["Image"]
+        services[service] = container_image(root, row)
         for mount in row["Mounts"]:
             if mount["Type"] == "volume":
                 volumes[service + ":" + mount["Destination"]] = mount["Name"]
