@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import re
 import os
 import tempfile
 import urllib.request
@@ -32,6 +34,35 @@ def _read_url(url: str, limit: int, opener: Callable[..., object]) -> bytes:
     return body
 
 
+GITHUB_RELEASE_API = "https://api.github.com/repos/sapics/ip-location-db/releases/tags/latest"
+
+
+def _asset_digest(body: bytes, opener: Callable[..., object]) -> str:
+    """Verify against GitHub's digest for the exact default release asset.
+
+    The separate checksum release can lag behind the database release. Never
+    use this fallback for custom sources or accept a locally computed digest
+    without matching the independent HTTPS metadata.
+    """
+    metadata = json.loads(_read_url(GITHUB_RELEASE_API, 2 * 1024 * 1024, opener))
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("assets"), list):
+        raise ValueError("ASN release metadata is invalid")
+    assets = [a for a in metadata["assets"] if isinstance(a, dict)
+              and a.get("name") == "origin-asn.mmdb"]
+    if len(assets) != 1:
+        raise ValueError("ASN release asset missing or ambiguous")
+    asset = assets[0]
+    digest = asset.get("digest")
+    if (asset.get("browser_download_url") != DEFAULT_DATABASE_URL
+            or asset.get("state") != "uploaded"
+            or type(asset.get("id")) is not int or asset["id"] <= 0
+            or type(asset.get("size")) is not int or asset["size"] != len(body)
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest)):
+        raise ValueError("ASN release asset identity or digest is invalid")
+    return digest.split(":", 1)[1].lower()
+
+
 def update_once(
     destination: Path,
     database_url: str,
@@ -39,14 +70,22 @@ def update_once(
     *,
     opener: Callable[..., object] = urllib.request.urlopen,
 ) -> bool:
-    checksum_text = _read_url(checksum_url, 4096, opener).decode("ascii")
-    expected = checksum_text.split()[0].lower()
-    if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
-        raise ValueError("ASN checksum response is invalid")
+    official_source = database_url == DEFAULT_DATABASE_URL and checksum_url == DEFAULT_CHECKSUM_URL
+    expected = None
+    try:
+        parts = _read_url(checksum_url, 4096, opener).decode("ascii").split()
+        if not parts or not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+            raise ValueError("ASN checksum response is invalid")
+        expected = parts[0].lower()
+    except (OSError, UnicodeError, ValueError):
+        if not official_source:
+            raise
     body = _read_url(database_url, MAX_DATABASE_BYTES, opener)
     actual = hashlib.sha256(body).hexdigest()
     if actual != expected:
-        raise ValueError("ASN database checksum mismatch")
+        if not official_source or actual != _asset_digest(body, opener):
+            raise ValueError("ASN database checksum mismatch")
+        print("[asn-updater] integrity=verified source=github-asset-digest", flush=True)
     if destination.exists() and hashlib.sha256(destination.read_bytes()).hexdigest() == actual:
         os.utime(destination, None)
         return False
@@ -80,7 +119,9 @@ async def main() -> None:
     interval = int(os.getenv("ASN_UPDATE_INTERVAL_SECONDS", "86400"))
     if interval < 300:
         raise ValueError("ASN_UPDATE_INTERVAL_SECONDS must be at least 300")
+    failures = 0
     while True:
+        delay = interval
         try:
             changed = await asyncio.to_thread(
                 update_once,
@@ -88,16 +129,20 @@ async def main() -> None:
                 database_url,
                 checksum_url,
             )
+            failures = 0
             print(
                 f"[asn-updater] database={'updated' if changed else 'current'}",
                 flush=True,
             )
         except (OSError, UnicodeError, ValueError) as error:
+            failures = min(failures + 1, 5)
+            delay = min(interval, 3600, 300 * 2 ** (failures - 1))
+            # URLs and exception values can include custom-source credentials.
             print(
-                f"[asn-updater] update failed: {type(error).__name__}: {error}",
+                f"[asn-updater] update failed: {type(error).__name__}; retry_in={delay}s",
                 flush=True,
             )
-        await asyncio.sleep(interval)
+        await asyncio.sleep(delay)
 
 
 if __name__ == "__main__":

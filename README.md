@@ -710,3 +710,13 @@ HTTPS. A relay request from the host cannot prove client interception or DNS.
 A membership mismatch may occur while a pool publication is in progress; repeat
 the diagnosis before treating it as a persistent failure. A timeout reports only
 an unsuccessful request, not a provider billing or outage diagnosis.
+
+The ASN updater verifies the database against the configured SHA-256 file. For
+exactly the built-in GitHub database/checksum URL pair, a missing, invalid, or
+mismatching checksum file triggers a fallback to GitHub's HTTPS release metadata.
+The asset name, URL, uploaded state, size, ID, and SHA-256 digest must identify and
+match the downloaded database. Custom checksum sources are never overridden.
+If neither source verifies the bytes, the old file and its freshness timestamp
+remain unchanged. Failed updates retry after 5 minutes, then back off up to an
+hour (never exceeding the configured normal interval); success resets the retry
+schedule. Tokens or credential-bearing URLs are not included in failure logs.
