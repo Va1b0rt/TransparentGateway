@@ -78,8 +78,19 @@ def diagnose(ctl, timeout=60):
                 healthy = len(matches) == 1 and matches[0].get('State') == 'running' and matches[0].get('Health', '') in ('', 'healthy')
                 if healthy:
                     running.add(service)
+                if not matches:
+                    detail = 'container missing'
+                elif len(matches) != 1:
+                    detail = 'unexpected number of service containers'
+                else:
+                    state = matches[0].get('State')
+                    health = matches[0].get('Health', '')
+                    # Only fixed Docker states may enter a shareable report.
+                    state = state if state in {'running', 'exited', 'created', 'restarting', 'paused', 'dead', 'removing'} else 'unknown'
+                    health = health if health in {'healthy', 'unhealthy', 'starting'} else 'not-reported'
+                    detail = f'state={state} health={health}'
                 add('service.' + service, 'PASS' if healthy else 'FAIL',
-                    'running' if healthy else 'missing, stopped, or unhealthy', '' if healthy else logs(service))
+                    detail, '' if healthy else logs(service))
         except Exception:
             add('services', 'FAIL', 'could not read service status', 'sudo docker compose ps --all')
     else:

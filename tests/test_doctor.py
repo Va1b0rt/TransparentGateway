@@ -78,6 +78,7 @@ def test_stopped_fetcher_does_not_hide_readable_pools(lab):
     lab[1]['stopped'].add('fetcher')
     result = rows(lab)
     assert result['service.fetcher'][0] == 'FAIL'
+    assert 'state=exited' in result['service.fetcher'][1]
     assert result['pool.raw'][0] == 'PASS'
     assert 'logs --tail 50 fetcher' in result['service.fetcher'][2]
 
