@@ -678,3 +678,35 @@ behaviour, use the end-to-end VLAN tests above.
 ## License
 
 Transparent Gateway is available under the MIT License. See `LICENSE`.
+
+## Diagnose a gateway
+
+On the gateway, from the installed repository directory, run:
+
+```sh
+sudo python3 scripts/tgctl.py doctor
+```
+
+`doctor` reads configuration, Docker and service status, Redis pool snapshots,
+validator lineage, and active membership. When prerequisites are valid, it sends
+one echo request through the local relay and compares its exit with the active
+pool. It does not restart services, write configuration, or change network rules.
+The request can appear in the echo service's access logs.
+
+Each row is `PASS`, `FAIL`, `WARN`, or `SKIP`. Independent checks continue after a
+failure; blocked checks name their missing prerequisite. Pool rows show counts,
+age, and freshness limits. Failed service checks suggest a specific log command.
+Logs are not automatically collected: inspect them locally before sharing them.
+Addresses, credentials, raw subprocess output, and echo payloads are not printed.
+An HTTP echo produces a warning because its transport has no TLS verification.
+
+The default command budget is 60 seconds (`--timeout 1..300`); individual external
+commands are capped at 15 seconds and the remaining budget. Exit code 1 means a
+failed host check; code 0 means no failed host checks, possibly with warnings.
+`scope=host client=NOT_TESTED` is explicit even when all host checks pass. Run
+`scripts/client-check.py` separately on the client to test its route, DNS, and
+HTTPS. A relay request from the host cannot prove client interception or DNS.
+
+A membership mismatch may occur while a pool publication is in progress; repeat
+the diagnosis before treating it as a persistent failure. A timeout reports only
+an unsuccessful request, not a provider billing or outage diagnosis.

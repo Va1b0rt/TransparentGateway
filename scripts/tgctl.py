@@ -213,7 +213,7 @@ def validate_permissions():
             raise UserError(f"wrong group for {name}; expected GID 65532")
 
 
-def load_and_validate():
+def load_and_validate(*, check_compose=True):
     validate_permissions()
     values = parse_env(ROOT / ".env")
     required = {
@@ -276,9 +276,10 @@ def load_and_validate():
     if not candidates:
         raise UserError("proxy inventory is empty")
 
-    compose = run(["docker", "compose", "config", "--quiet"], timeout=60)
-    if compose.returncode:
-        raise UserError("docker compose rejected the configuration")
+    if check_compose:
+        compose = run(["docker", "compose", "config", "--quiet"], timeout=60)
+        if compose.returncode:
+            raise UserError("docker compose rejected the configuration")
     return values, candidates, credentials
 
 
@@ -477,6 +478,11 @@ def ready(args):
     raise UserError("readiness failed: " + reason)
 
 
+def doctor(args):
+    import doctor as diagnostics
+    diagnostics.main(sys.modules[__name__], args)
+
+
 def update(args):
     require_root()
     from tg_update import update as perform_update
@@ -504,6 +510,9 @@ def main():
     readiness.add_argument("--timeout", type=int, default=300)
     readiness.add_argument("--since", type=float, help=argparse.SUPPRESS)
     readiness.set_defaults(handler=ready)
+    diagnostic = commands.add_parser("doctor", help="read-only host diagnosis; client checks remain separate")
+    diagnostic.add_argument("--timeout", type=int, default=60, help="total probe budget in seconds (1-300)")
+    diagnostic.set_defaults(handler=doctor)
     updating = commands.add_parser("update", help="install an origin revision; automatically restore the previous version on failure")
     updating.add_argument("revision", nargs="?", default="main", help="branch, tag, or commit from origin (default: main)")
     updating.add_argument("--timeout", type=int, default=300, help="readiness timeout, separately for update and recovery")
